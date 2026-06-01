@@ -115,4 +115,5 @@ Config is saved to `~/.config/pillpanel/config.json`.
 ```bash
 pip3 uninstall pillpanel
 rm -f ~/.config/autostart/pillpanel.desktop
+rm -f ~/.local/share/applications/pillpanel.desktop
 ```

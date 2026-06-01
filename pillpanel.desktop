@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=PillPanel
+Comment=Custom Cinnamon top panel
+Exec=pillpanel
+Icon=preferences-system
+Type=Application
+Categories=Utility;
+Keywords=panel;tray;taskbar;
