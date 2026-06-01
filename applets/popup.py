@@ -73,6 +73,14 @@ class PanelPopup:
         win.set_type_hint(Gdk.WindowTypeHint.DROPDOWN_MENU)
         win.get_style_context().add_class('panel-popup')
 
+        # RGBA visual lets the compositor alpha-clip the rounded corners.
+        # Without it, the X11 window background is a solid black rectangle
+        # visible outside the CSS border-radius.
+        screen = win.get_screen()
+        rgba = screen.get_rgba_visual()
+        if rgba and screen.is_composited():
+            win.set_visual(rgba)
+
         win.add(content)
         content.show_all()
 
