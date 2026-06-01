@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pillpanel"
+version = "0.1.0"
+description = "Custom floating panel for Linux Mint Cinnamon"
+requires-python = ">=3.10"
+# Runtime deps are system packages (GTK, GI, D-Bus) — install via apt first.
+# See install.sh or the repo README for the apt command.
+
+[project.scripts]
+pillpanel = "pillpanel:main"
+
+[tool.setuptools]
+py-modules = ["pillpanel"]
+packages   = ["applets"]
