@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: pillpanel
+Version: 0.1.0
+Summary: Custom floating panel for Linux Mint Cinnamon
+Requires-Python: >=3.10

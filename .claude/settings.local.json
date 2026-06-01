@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"import ast, pathlib; [ast.parse\\(f.read_text\\(\\)\\) for f in pathlib.Path\\('.'\\).glob\\('**/*.py'\\) if 'trayprobe' not in f.name]; print\\('All OK'\\)\")",
+      "Bash(pkill -f pillpanel.py)",
+      "Bash(DISPLAY=:0 python3 pillpanel.py --autohide)",
+      "Bash(DISPLAY=:0 python3 /home/n-linux/Projects/NPanel/pillpanel.py --autohide)",
+      "Bash(kill 29854)",
+      "Bash(DISPLAY=:0 python3 /home/n-linux/Projects/NPanel/pillpanel.py --autohide > /tmp/pillpanel.log 2>&1 & *)",
+      "Bash(DISPLAY=:0 python3 /home/n-linux/Projects/NPanel/pillpanel.py --autohide --debug)",
+      "Bash(pkill xapp-sn-watcher *)",
+      "Bash(pkill -f \"xapp-sn-watcher\")",
+      "Bash(pkill -f \"pillpanel\")",
+      "Bash(pkill -9 -f \"xapp-sn-watcher\")",
+      "Bash(pkill -9 -f \"pillpanel\")",
+      "Bash(DISPLAY=:0 dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.GetNameOwner string:org.kde.StatusNotifierWatcher)",
+      "Bash(DISPLAY=:0 dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.GetConnectionUnixProcessID string:\":1.133\")",
+      "Bash(ps -p 5657 -o pid,cmd)",
+      "Bash(kill 5657)",
+      "Bash(DISPLAY=:0 nohup python3 pillpanel.py)",
+      "Bash(echo \"PID: $!\")",
+      "Bash(cat /proc/9281/cmdline | tr '\\\\0' ' ' 2>/dev/null || ps aux | grep pillpanel)",
+      "Read(//proc/9281/**)",
+      "Bash(DISPLAY=:0 nohup python3 /home/n-linux/Projects/NPanel/pillpanel.py --autohide)",
+      "Bash(chmod +x /home/n-linux/Projects/NPanel/install.sh)"
+    ],
+    "additionalDirectories": [
+      "/tmp"
+    ]
+  }
+}
