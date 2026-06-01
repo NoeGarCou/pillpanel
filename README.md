@@ -42,7 +42,7 @@ sudo apt-get install -y \
 
 # 2. Install the package
 # (--break-system-packages is required on Ubuntu 24.04+; safe with --user)
-pip3 install --user --break-system-packages git+https://github.com/NoeGarCou/NPanel.git
+pip3 install --user --break-system-packages git+https://github.com/NoeGarCou/pillpanel.git
 ```
 
 Make sure `~/.local/bin` is on your `PATH` (it usually is on Mint; if not, add `export PATH="$HOME/.local/bin:$PATH"` to your `~/.bashrc`).
@@ -50,7 +50,7 @@ Make sure `~/.local/bin` is on your `PATH` (it usually is on Mint; if not, add `
 ### From a local clone
 
 ```bash
-git clone https://github.com/NoeGarCou/NPanel.git
+git clone https://github.com/NoeGarCou/pillpanel.git
 cd NPanel
 ./install.sh       # installs deps + pip package + autostart entry
 ```
