@@ -208,7 +208,7 @@ class NetworkPopup:
             b.get_style_context().add_class('cal-settings-btn')
             b.set_halign(Gtk.Align.START)
             b.set_margin_start(8)
-            b.connect('clicked', lambda _, c=cmd: _launch(c))
+            b.connect('clicked', lambda _, c=cmd: self._hide_and_launch(c))
             root.pack_start(b, False, False, 0)
 
         root.pack_start(Gtk.Box(), False, False, 6)
@@ -362,6 +362,10 @@ class NetworkPopup:
             )
         except Exception as e:
             log.error(f"[Network] WiFi toggle: {e}")
+
+    def _hide_and_launch(self, cmd):
+        self._popup.hide()
+        _launch(cmd)
 
 
 # ── Module-level helpers ───────────────────────────────────────────────────────

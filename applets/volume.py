@@ -166,6 +166,7 @@ class VolumeApplet(Applet):
         return 'audio-volume-high-symbolic'
 
     def _open_settings(self):
+        self._popup.hide()
         for cmd in (['gnome-control-center', 'sound'],
                     ['cinnamon-settings', 'sound'],
                     ['pavucontrol']):

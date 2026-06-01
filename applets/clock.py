@@ -13,13 +13,16 @@ Popup layout:
   └─────────────────────┴──────────────────────────────┘
 """
 
+import glob
 import logging
+import os
+import re as _re
 import subprocess
 from datetime import date, timedelta, datetime
 
 import gi
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, GLib
+from gi.repository import Gtk, GLib, Pango
 
 from .base  import Applet
 from .popup import PanelPopup
@@ -28,6 +31,68 @@ log = logging.getLogger('pillpanel.clock')
 
 # Column indices for weekend days (0 = Monday … 6 = Sunday)
 _WEEKEND = {5, 6}
+
+# ── ICS event loading ──────────────────────────────────────────────────────────
+
+def _load_events(day: date) -> list:
+    """Return sorted list of (time_str, summary) for events on `day`.
+
+    Reads all calendar.ics files from Evolution Data Server's local calendar
+    store — the same source GNOME Calendar writes to.
+    """
+    results = []
+    for ics_path in glob.glob(os.path.expanduser(
+            '~/.local/share/evolution/calendar/*/calendar.ics')):
+        try:
+            with open(ics_path, encoding='utf-8', errors='replace') as f:
+                raw = f.read()
+            # RFC 5545 line unfolding: CRLF or LF followed by a space/tab is a
+            # continuation of the previous line, not a new property.
+            raw = _re.sub(r'\r?\n[ \t]', '', raw)
+            for block in _re.findall(
+                    r'BEGIN:VEVENT.*?END:VEVENT', raw, _re.DOTALL):
+                ev = _parse_vevent(block, day)
+                if ev:
+                    results.append(ev)
+        except Exception as e:
+            log.debug(f"[Calendar] Read error {ics_path}: {e}")
+    results.sort()
+    return [(t, s) for _, t, s in results]   # drop sort key
+
+
+def _parse_vevent(block: str, day: date):
+    """Return (sort_key, time_str, summary) if VEVENT falls on `day`, else None."""
+    def field(name):
+        m = _re.search(rf'^{name}(?:;[^:]*)?:([^\r\n]*)', block, _re.M | _re.I)
+        return m.group(1).strip() if m else ''
+
+    dtstart_m = _re.search(r'^(DTSTART[^\r\n]*)', block, _re.M | _re.I)
+    if not dtstart_m:
+        return None
+    line   = dtstart_m.group(1)
+    colon  = line.index(':')
+    params = line[:colon].upper()
+    value  = line[colon + 1:].strip()
+
+    if 'VALUE=DATE' in params or (len(value) == 8 and value.isdigit()):
+        # All-day event: YYYYMMDD
+        try:
+            ev_date = date(int(value[:4]), int(value[4:6]), int(value[6:8]))
+        except ValueError:
+            return None
+        if ev_date != day:
+            return None
+        return ('0000', '', field('SUMMARY') or '(No title)')
+    else:
+        # Datetime: YYYYMMDDTHHMMSS[Z] (UTC or floating; we ignore TZ for display)
+        try:
+            ev_date = date(int(value[:4]), int(value[4:6]), int(value[6:8]))
+            hh, mm  = int(value[9:11]), int(value[11:13])
+        except (ValueError, IndexError):
+            return None
+        if ev_date != day:
+            return None
+        return (f'{hh:02d}{mm:02d}', f'{hh:02d}:{mm:02d}', field('SUMMARY') or '(No title)')
 
 
 def _month_weeks(year: int, month: int):
@@ -111,7 +176,7 @@ class CalendarPopup:
     def toggle(self, btn):
         self._popup.toggle(btn)
 
-    # ── Left panel — date header + "No Events" ─────────────────────────────────
+    # ── Left panel — date header + events ─────────────────────────────────────
 
     def _build_left(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -132,30 +197,85 @@ class CalendarPopup:
         sep.get_style_context().add_class('cal-sep')
         box.pack_start(sep, False, False, 0)
 
-        # Centred placeholder — clicking opens the calendar app (same as Cinnamon)
-        ph_btn = Gtk.Button()
-        ph_btn.set_relief(Gtk.ReliefStyle.NONE)
-        ph_btn.set_focus_on_click(False)
-        ph_btn.get_style_context().add_class('cal-events-btn')
-        ph_btn.set_vexpand(True)
-        ph_btn.connect('clicked', lambda _: self._open_calendar())
-
-        ph = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        ph.set_valign(Gtk.Align.CENTER)
-        ph.set_halign(Gtk.Align.CENTER)
-
-        icon = Gtk.Image.new_from_icon_name('x-office-calendar-symbolic', Gtk.IconSize.DIALOG)
-        icon.get_style_context().add_class('cal-dim')
-
-        lbl = Gtk.Label(label='No Events')
-        lbl.get_style_context().add_class('cal-dim')
-
-        ph.pack_start(icon, False, False, 0)
-        ph.pack_start(lbl,  False, False, 0)
-        ph_btn.add(ph)
-        box.pack_start(ph_btn, True, True, 0)
+        # Dynamic slot — filled by _update_events()
+        self._events_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self._events_box.set_vexpand(True)
+        box.pack_start(self._events_box, True, True, 0)
+        self._update_events(self._today)
 
         return box
+
+    def _update_events(self, d: date):
+        for child in self._events_box.get_children():
+            self._events_box.remove(child)
+
+        events = _load_events(d)
+
+        if not events:
+            ph_btn = Gtk.Button()
+            ph_btn.set_relief(Gtk.ReliefStyle.NONE)
+            ph_btn.set_focus_on_click(False)
+            ph_btn.get_style_context().add_class('cal-events-btn')
+            ph_btn.set_vexpand(True)
+            ph_btn.connect('clicked', lambda _: self._open_calendar())
+
+            ph = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            ph.set_valign(Gtk.Align.CENTER)
+            ph.set_halign(Gtk.Align.CENTER)
+            icon = Gtk.Image.new_from_icon_name(
+                'x-office-calendar-symbolic', Gtk.IconSize.DIALOG)
+            icon.get_style_context().add_class('cal-dim')
+            lbl = Gtk.Label(label='No Events')
+            lbl.get_style_context().add_class('cal-dim')
+            ph.pack_start(icon, False, False, 0)
+            ph.pack_start(lbl,  False, False, 0)
+            ph_btn.add(ph)
+            self._events_box.pack_start(ph_btn, True, True, 0)
+        else:
+            scroll = Gtk.ScrolledWindow()
+            scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            scroll.set_vexpand(True)
+
+            event_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            event_list.set_margin_top(4)
+
+            for time_str, summary in events:
+                btn = Gtk.Button()
+                btn.set_relief(Gtk.ReliefStyle.NONE)
+                btn.set_focus_on_click(False)
+                btn.get_style_context().add_class('cal-events-btn')
+                btn.connect('clicked', lambda _: self._open_calendar())
+
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                row.set_margin_start(4)
+                row.set_margin_end(4)
+                row.set_margin_top(3)
+                row.set_margin_bottom(3)
+
+                dot = Gtk.Label(label='●')
+                dot.get_style_context().add_class('cal-event-dot')
+                row.pack_start(dot, False, False, 0)
+
+                if time_str:
+                    time_lbl = Gtk.Label(label=time_str)
+                    time_lbl.get_style_context().add_class('cal-event-time')
+                    time_lbl.set_width_chars(5)
+                    time_lbl.set_halign(Gtk.Align.START)
+                    row.pack_start(time_lbl, False, False, 0)
+
+                sum_lbl = Gtk.Label(label=summary)
+                sum_lbl.set_halign(Gtk.Align.START)
+                sum_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+                sum_lbl.get_style_context().add_class('cal-event-summary')
+                row.pack_start(sum_lbl, True, True, 0)
+
+                btn.add(row)
+                event_list.pack_start(btn, False, False, 0)
+
+            scroll.add(event_list)
+            self._events_box.pack_start(scroll, True, True, 0)
+
+        self._events_box.show_all()
 
     # ── Right panel — calendar grid ────────────────────────────────────────────
 
@@ -333,10 +453,12 @@ class CalendarPopup:
         self._view_year     = d.year
         self._view_month    = d.month
         self._update_left_date(d)
+        self._update_events(d)
         self._refresh_header()
         self._refresh_grid()
 
     def _open_calendar(self):
+        self._popup.hide()
         for cmd in (['gnome-calendar'],
                     ['xdg-open', 'calendar://']):
             try:
@@ -346,6 +468,7 @@ class CalendarPopup:
                 continue
 
     def _open_settings(self):
+        self._popup.hide()
         for cmd in (['cinnamon-settings', 'calendar'],
                     ['gnome-control-center', 'datetime']):
             try:

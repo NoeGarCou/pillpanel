@@ -250,7 +250,7 @@ class BatteryPopup:
         settings.get_style_context().add_class('cal-settings-btn')
         settings.set_halign(Gtk.Align.START)
         settings.set_margin_start(8)
-        settings.connect('clicked', lambda _: _open_power_settings())
+        settings.connect('clicked', lambda _: self._hide_and_open_settings())
         root.pack_start(settings, False, False, 0)
 
         root.pack_start(Gtk.Box(), False, False, 4)
@@ -302,6 +302,10 @@ class BatteryPopup:
 
         except Exception as e:
             log.error(f"[Battery] Popup refresh: {e}")
+
+    def _hide_and_open_settings(self):
+        self._popup.hide()
+        _open_power_settings()
 
     def _set_profile(self, profile):
         try:
