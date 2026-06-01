@@ -22,10 +22,13 @@
       "Bash(cat /proc/9281/cmdline | tr '\\\\0' ' ' 2>/dev/null || ps aux | grep pillpanel)",
       "Read(//proc/9281/**)",
       "Bash(DISPLAY=:0 nohup python3 /home/n-linux/Projects/NPanel/pillpanel.py --autohide)",
-      "Bash(chmod +x /home/n-linux/Projects/NPanel/install.sh)"
+      "Bash(chmod +x /home/n-linux/Projects/NPanel/install.sh)",
+      "Bash(cp /home/n-linux/Projects/NPanel/pillpanel.desktop ~/.local/share/applications/pillpanel.desktop && echo \"done\")",
+      "Bash(python3 -c \"from applets.appmenu import AppMenuApplet; print\\('OK'\\)\")"
     ],
     "additionalDirectories": [
-      "/tmp"
+      "/tmp",
+      "/home/n-linux/.local/share/applications"
     ]
   }
 }
