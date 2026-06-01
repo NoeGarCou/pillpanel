@@ -129,7 +129,7 @@ def _make_panel_css(pill_bg: str, pill_stroke: str, outer_height: int) -> str:
 
 /* ── AppMenu button — flush with pill left edge ─────────── */
 .appmenu-btn {{
-    padding-left: 8px;
+    padding-left: 2px;
     padding-right: 6px;
 }}
 
