@@ -1,10 +1,14 @@
 """applets/appmenu.py — system menu + PillPanel preferences."""
 
+import importlib.metadata as _imeta
+import json
 import logging
 import re
 import shutil
 import subprocess
 import sys
+import threading
+import urllib.request
 
 import gi
 gi.require_version('Gtk', '3.0')
@@ -15,6 +19,30 @@ from .base  import Applet
 from .popup import PanelPopup
 
 log = logging.getLogger('pillpanel.appmenu')
+
+_GITHUB_API  = 'https://api.github.com/repos/NoeGarCou/pillpanel/commits/main'
+_GITHUB_PKG  = 'git+https://github.com/NoeGarCou/pillpanel.git'
+
+
+def _installed_commit() -> 'str | None':
+    """Return the full git SHA the installed package was built from, or None."""
+    try:
+        raw = _imeta.distribution('pillpanel').read_text('direct_url.json')
+        if raw:
+            return json.loads(raw).get('vcs_info', {}).get('commit_id')
+    except Exception:
+        return None
+
+
+def _latest_commit() -> str:
+    """Fetch the latest commit SHA on main from GitHub (raises on failure)."""
+    req = urllib.request.Request(
+        _GITHUB_API,
+        headers={'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'pillpanel'},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read())['sha']
+
 
 # Curated list — only entries whose command exists on PATH are shown.
 _SYSTEM_APPS = [
@@ -184,6 +212,20 @@ class PreferencesWindow:
         notice.set_halign(Gtk.Align.START)
         vbox.pack_start(notice, False, False, 0)
 
+        # ── Updates ────────────────────────────────────────────────────────────
+        vbox.pack_start(_section_label('Updates'), False, False, 0)
+
+        update_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self._update_btn = Gtk.Button(label='Check for updates')
+        self._update_btn.connect('clicked', self._on_update_btn)
+        update_row.pack_start(self._update_btn, False, False, 0)
+        self._update_lbl = Gtk.Label(label='')
+        self._update_lbl.get_style_context().add_class('cal-dim')
+        self._update_lbl.set_halign(Gtk.Align.START)
+        update_row.pack_start(self._update_lbl, True, True, 0)
+        vbox.pack_start(update_row, False, False, 0)
+        self._update_state = 'idle'  # idle | checking | available | updating
+
         # ── Buttons ────────────────────────────────────────────────────────────
         sep = Gtk.Separator()
         sep.set_margin_top(4)
@@ -230,6 +272,77 @@ class PreferencesWindow:
         self._win.hide()
         subprocess.Popen([sys.executable] + sys.argv)
         Gtk.main_quit()
+
+    # ── Update handlers ────────────────────────────────────────────────────────
+
+    def _on_update_btn(self, _btn):
+        if self._update_state == 'available':
+            self._run_update()
+        else:
+            self._run_check()
+
+    def _run_check(self):
+        self._update_state = 'checking'
+        self._update_btn.set_sensitive(False)
+        self._update_lbl.set_text('Checking...')
+        threading.Thread(target=self._check_thread, daemon=True).start()
+
+    def _check_thread(self):
+        try:
+            latest    = _latest_commit()
+            installed = _installed_commit()
+            up_to_date = bool(installed and installed == latest)
+            GLib.idle_add(self._after_check, up_to_date, latest)
+        except Exception as e:
+            GLib.idle_add(self._after_check, None, str(e))
+
+    def _after_check(self, up_to_date, info):
+        if up_to_date is True:
+            self._update_state = 'idle'
+            self._update_lbl.set_text('Already up to date.')
+            self._update_btn.set_label('Check for updates')
+        elif up_to_date is False:
+            self._update_state = 'available'
+            self._update_lbl.set_text(f'Update available  ({info[:7]})')
+            self._update_btn.set_label('Update now')
+        else:
+            self._update_state = 'idle'
+            self._update_lbl.set_text('Could not check for updates.')
+            self._update_btn.set_label('Check for updates')
+            log.warning(f'[Updates] Check failed: {info}')
+        self._update_btn.set_sensitive(True)
+        return False
+
+    def _run_update(self):
+        self._update_state = 'updating'
+        self._update_btn.set_sensitive(False)
+        self._update_lbl.set_text('Updating...')
+        threading.Thread(target=self._update_thread, daemon=True).start()
+
+    def _update_thread(self):
+        try:
+            result = subprocess.run(
+                [sys.executable, '-m', 'pip', 'install', '--user',
+                 '--break-system-packages', '--force-reinstall', _GITHUB_PKG],
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode == 0:
+                GLib.idle_add(self._after_update, True, None)
+            else:
+                GLib.idle_add(self._after_update, False, result.stderr[-300:])
+        except Exception as e:
+            GLib.idle_add(self._after_update, False, str(e))
+
+    def _after_update(self, success, error):
+        self._update_state = 'idle'
+        self._update_btn.set_label('Check for updates')
+        self._update_btn.set_sensitive(True)
+        if success:
+            self._update_lbl.set_text('Updated. Click Save & Restart to apply.')
+        else:
+            self._update_lbl.set_text('Update failed — check logs.')
+            log.error(f'[Updates] pip failed: {error}')
+        return False
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -294,7 +407,7 @@ def _color_button(css_str: str, title: str) -> Gtk.ColorButton:
     return btn
 
 def _save(cfg: dict):
-    import json, os
+    import os
     path = os.path.expanduser('~/.config/pillpanel/config.json')
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w') as f:
