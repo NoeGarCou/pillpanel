@@ -73,6 +73,13 @@ class PanelPopup:
         win.set_type_hint(Gdk.WindowTypeHint.DROPDOWN_MENU)
         win.get_style_context().add_class('panel-popup')
 
+        # Request RGBA visual so the GTK theme can composite rounded corners.
+        screen = win.get_screen()
+        rgba = screen.get_rgba_visual()
+        if rgba and screen.is_composited():
+            win.set_visual(rgba)
+        win.set_app_paintable(True)
+
         win.add(content)
         content.show_all()
 

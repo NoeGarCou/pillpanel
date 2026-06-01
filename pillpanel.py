@@ -96,7 +96,6 @@ def _make_panel_css(pill_bg: str, pill_stroke: str, outer_height: int) -> str:
     """
     pill_radius = (outer_height - PILL_MARGIN_TOP * 2) // 2
     btn_min_h   = outer_height - PILL_MARGIN_TOP * 2 - 4
-    popup_bg    = _popup_bg(pill_bg)
     return f"""
 /* ── Pill container ───────────────────────────────────────── */
 .pill {{
@@ -219,11 +218,6 @@ def _make_panel_css(pill_bg: str, pill_stroke: str, outer_height: int) -> str:
     background: rgba(255,255,255,0.08);
 }}
 
-/* ── Popup windows (dark background) ───────────────────────── */
-window.panel-popup {{
-    background-color: {popup_bg};
-}}
-
 /* ── Calendar ────────────────────────────────────────────────── */
 separator.cal-sep {{
     background-color: rgba(255,255,255,0.15);
@@ -327,14 +321,6 @@ separator.cal-sep {{
 }}
 """
 
-
-def _popup_bg(pill_bg: str) -> str:
-    """Return a near-opaque version of the pill colour for popup backgrounds."""
-    import re
-    m = re.match(r'rgba\((\d+),\s*(\d+),\s*(\d+)', pill_bg)
-    if m:
-        return f'rgba({m.group(1)}, {m.group(2)}, {m.group(3)}, 0.98)'
-    return 'rgba(30, 30, 36, 0.98)'
 
 # ─── Logging ───────────────────────────────────────────────────────────────────
 
