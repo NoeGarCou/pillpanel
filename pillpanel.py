@@ -226,6 +226,19 @@ window.panel-popup {{
     border: 1px solid rgba(255,255,255,0.07);
 }}
 
+/* ── Calendar events area (clickable "No Events" placeholder) ── */
+.cal-events-btn {{
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    outline: none;
+    border-radius: 8px;
+    padding: 0;
+}}
+.cal-events-btn:hover {{
+    background: rgba(255,255,255,0.06);
+}}
+
 /* ── Calendar ────────────────────────────────────────────────── */
 separator.cal-sep {{
     background-color: rgba(255,255,255,0.15);

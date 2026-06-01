@@ -132,9 +132,15 @@ class CalendarPopup:
         sep.get_style_context().add_class('cal-sep')
         box.pack_start(sep, False, False, 0)
 
-        # Centred placeholder
+        # Centred placeholder — clicking opens the calendar app (same as Cinnamon)
+        ph_btn = Gtk.Button()
+        ph_btn.set_relief(Gtk.ReliefStyle.NONE)
+        ph_btn.set_focus_on_click(False)
+        ph_btn.get_style_context().add_class('cal-events-btn')
+        ph_btn.set_vexpand(True)
+        ph_btn.connect('clicked', lambda _: self._open_calendar())
+
         ph = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        ph.set_vexpand(True)
         ph.set_valign(Gtk.Align.CENTER)
         ph.set_halign(Gtk.Align.CENTER)
 
@@ -146,7 +152,8 @@ class CalendarPopup:
 
         ph.pack_start(icon, False, False, 0)
         ph.pack_start(lbl,  False, False, 0)
-        box.pack_start(ph, True, True, 0)
+        ph_btn.add(ph)
+        box.pack_start(ph_btn, True, True, 0)
 
         return box
 
@@ -328,6 +335,15 @@ class CalendarPopup:
         self._update_left_date(d)
         self._refresh_header()
         self._refresh_grid()
+
+    def _open_calendar(self):
+        for cmd in (['gnome-calendar'],
+                    ['xdg-open', 'calendar://']):
+            try:
+                subprocess.Popen(cmd)
+                return
+            except FileNotFoundError:
+                continue
 
     def _open_settings(self):
         for cmd in (['cinnamon-settings', 'calendar'],
