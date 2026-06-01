@@ -103,7 +103,8 @@ Open the app menu (Linux Mint logo, top-left) → **Panel Preferences**.
 | Panel height | Outer window height in px (requires restart) |
 | Icon size | General icon size for panel buttons (requires restart) |
 | Show Desktop icon | Size of the Show Desktop icon (requires restart) |
-| App menu icon size | Icon size inside the app menu (requires restart) |
+| App menu button icon | Size of the panel button icon (requires restart) |
+| App menu icon size | Icon size inside the app menu dropdown (requires restart) |
 | App menu font size | Font size inside the app menu (requires restart) |
 
 Config is saved to `~/.config/pillpanel/config.json`.

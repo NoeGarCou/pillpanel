@@ -38,13 +38,19 @@ class AppMenuApplet(Applet):
         btn.get_style_context().add_class('panel-btn')
         btn.get_style_context().add_class('appmenu-btn')
         btn.set_tooltip_text('System menu')
-        btn.add(Gtk.Image.new_from_icon_name(
+
+        self._btn_icon = Gtk.Image.new_from_icon_name(
             'linuxmint-logo-ring-symbolic', Gtk.IconSize.SMALL_TOOLBAR
-        ))
+        )
+        btn.add(self._btn_icon)
 
         self._popup = self._build_popup()
         btn.connect('clicked', lambda b: self._popup.toggle(b))
         return btn
+
+    def after_icon_size(self):
+        px = self.panel.config.get('appmenu_btn_icon_size', 16)
+        self._btn_icon.set_pixel_size(px)
 
     def _build_popup(self):
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -161,6 +167,10 @@ class PreferencesWindow:
         self._desktop_icon_spin.set_value(cfg.get('show_desktop_icon_size', 16))
         vbox.pack_start(_pref_row('Show Desktop icon (px)', self._desktop_icon_spin), False, False, 0)
 
+        self._appmenu_btn_icon_spin = Gtk.SpinButton.new_with_range(12, 48, 2)
+        self._appmenu_btn_icon_spin.set_value(cfg.get('appmenu_btn_icon_size', 16))
+        vbox.pack_start(_pref_row('App menu button icon (px)', self._appmenu_btn_icon_spin), False, False, 0)
+
         self._appmenu_icon_spin = Gtk.SpinButton.new_with_range(12, 48, 2)
         self._appmenu_icon_spin.set_value(cfg.get('appmenu_icon_size', 20))
         vbox.pack_start(_pref_row('App menu icon size (px)', self._appmenu_icon_spin), False, False, 0)
@@ -213,6 +223,7 @@ class PreferencesWindow:
         self._panel.config['outer_height']           = int(self._height_spin.get_value())
         self._panel.config['icon_size']              = int(self._icon_spin.get_value())
         self._panel.config['show_desktop_icon_size'] = int(self._desktop_icon_spin.get_value())
+        self._panel.config['appmenu_btn_icon_size']  = int(self._appmenu_btn_icon_spin.get_value())
         self._panel.config['appmenu_icon_size']      = int(self._appmenu_icon_spin.get_value())
         self._panel.config['appmenu_font_size']      = int(self._appmenu_font_spin.get_value())
         _save(self._panel.config)

@@ -55,6 +55,7 @@ _CONFIG_DEFAULTS = {
     'outer_height':         36,
     'icon_size':            16,
     'show_desktop_icon_size': 16,
+    'appmenu_btn_icon_size':  16,
     'appmenu_icon_size':      20,
     'appmenu_font_size':      13,
 }
