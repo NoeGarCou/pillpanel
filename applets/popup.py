@@ -78,7 +78,6 @@ class PanelPopup:
         rgba = screen.get_rgba_visual()
         if rgba and screen.is_composited():
             win.set_visual(rgba)
-        win.set_app_paintable(True)
 
         win.add(content)
         content.show_all()
