@@ -620,25 +620,23 @@ class _ChatWidget:
         if not text:
             return
         self.entry.set_text('')
-        # Apply think-mode prefix to API content; display shows original text
-        think_on   = self._think_btn.get_active()
-        api_text   = ('/think ' if think_on else '/no_think ') + text
-        self._history.append({'role': 'user', 'content': api_text})
+        self._history.append({'role': 'user', 'content': text})
         self._add_bubble(text, is_user=True)
-        self._asst_text  = ''
-        self._think_buf  = ''
-        self._in_think   = False
+        self._asst_text   = ''
+        self._think_buf   = ''
+        self._in_think    = False
         self._asst_bubble = self._add_bubble('', is_user=False)
         self._is_cancelled = False
         self._set_sending(True)
-        self._status_lbl.set_text('Thinking…')
+        self._status_lbl.set_text('Generating…')
         threading.Thread(
             target=self._stream_thread,
-            args=(list(self._history), self.current_model),
+            args=(list(self._history), self.current_model,
+                  self._think_btn.get_active()),
             daemon=True,
         ).start()
 
-    def _stream_thread(self, messages: list, model: str):
+    def _stream_thread(self, messages: list, model: str, think: bool):
         try:
             try:
                 import openai
@@ -651,7 +649,8 @@ class _ChatWidget:
 
             client = openai.OpenAI(base_url=OLLAMA_BASE_URL, api_key='ollama')
             stream = client.chat.completions.create(
-                model=model, messages=messages, stream=True
+                model=model, messages=messages, stream=True,
+                extra_body={'think': think},
             )
             for chunk in stream:
                 if self._is_cancelled:
