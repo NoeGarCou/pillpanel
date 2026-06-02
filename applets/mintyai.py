@@ -125,6 +125,22 @@ def _fetch_models() -> list:
     return [m['name'] for m in data.get('models', [])]
 
 
+def _fetch_models_full() -> list:
+    """Return list of dicts with 'name' and 'size' keys."""
+    req = urllib.request.Request(f'{OLLAMA_API_BASE}/tags')
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        data = json.loads(resp.read())
+    return data.get('models', [])
+
+
+def _human_size(n: int) -> str:
+    for unit in ('B', 'KB', 'MB', 'GB'):
+        if n < 1024:
+            return f'{n:.0f} {unit}'
+        n /= 1024
+    return f'{n:.1f} GB'
+
+
 # ── WebKit2 (optional — markdown rendering) ───────────────────────────────────
 
 _WebKit2 = None
@@ -773,8 +789,6 @@ class _SettingsWindow:
         self._model_combo.set_active(0)
         vbox.pack_start(self._model_combo, False, False, 0)
 
-        threading.Thread(target=self._load_models, daemon=True).start()
-
         # ── System prompt ──────────────────────────────────────────────────────
         vbox.pack_start(_bold_label('System prompt'), False, False, 0)
 
@@ -822,6 +836,23 @@ class _SettingsWindow:
         dim_grid.attach(self._height_spin, 1, 1, 1, 1)
 
         vbox.pack_start(dim_grid, False, False, 0)
+
+        # ── Installed models ───────────────────────────────────────────────────
+        vbox.pack_start(_bold_label('Installed models'), False, False, 0)
+
+        self._models_lb = Gtk.ListBox()
+        self._models_lb.set_selection_mode(Gtk.SelectionMode.NONE)
+
+        models_scroll = Gtk.ScrolledWindow()
+        models_scroll.set_shadow_type(Gtk.ShadowType.IN)
+        models_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        models_scroll.set_min_content_height(40)
+        models_scroll.set_max_content_height(180)
+        models_scroll.add(self._models_lb)
+        vbox.pack_start(models_scroll, False, False, 0)
+
+        # Load combo + list together now that both widgets exist
+        threading.Thread(target=self._load_models_full, daemon=True).start()
 
         # ── Buttons ────────────────────────────────────────────────────────────
         vbox.pack_start(Gtk.Separator(), False, False, 0)
@@ -873,30 +904,128 @@ class _SettingsWindow:
 
         self._win.hide()
 
-    # ── Model listing (background thread) ─────────────────────────────────────
+    # ── Model loading (background thread) ─────────────────────────────────────
 
-    def _load_models(self):
+    def _load_models_full(self):
         try:
-            models = _fetch_models()
-            if models:
-                GLib.idle_add(self._populate_models, models)
+            models = _fetch_models_full()
         except Exception:
-            pass
+            models = []
+        GLib.idle_add(self._populate_all, models)
 
-    def _populate_models(self, models: list):
+    def _populate_all(self, models: list):
         current = self._chat.current_model
+        names   = [m['name'] for m in models]
+
+        # Combo
         self._model_combo.remove_all()
-        for name in models:
+        for name in names:
             self._model_combo.append_text(name)
-        for i, name in enumerate(models):
+        for i, name in enumerate(names):
             if name == current:
-                self._model_combo.set_active(i)
-                return
-        for i, name in enumerate(models):
-            if DEFAULT_MODEL in name:
-                self._model_combo.set_active(i)
-                return
-        self._model_combo.set_active(0)
+                self._model_combo.set_active(i); break
+        else:
+            for i, name in enumerate(names):
+                if DEFAULT_MODEL in name:
+                    self._model_combo.set_active(i); break
+            else:
+                if names: self._model_combo.set_active(0)
+
+        # Installed-models list
+        for row in self._models_lb.get_children():
+            self._models_lb.remove(row)
+
+        if not models:
+            row = Gtk.ListBoxRow()
+            row.set_selectable(False)
+            lbl = Gtk.Label(label='No models found — is Ollama running?')
+            lbl.set_margin_start(8); lbl.set_margin_top(6); lbl.set_margin_bottom(6)
+            lbl.get_style_context().add_class('cal-dim')
+            row.add(lbl)
+            self._models_lb.add(row)
+        else:
+            for m in models:
+                self._add_model_row(m['name'], m.get('size', 0))
+
+        self._models_lb.show_all()
+        return False
+
+    def _add_model_row(self, name: str, size_bytes: int):
+        row = Gtk.ListBoxRow()
+        row.set_selectable(False)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        box.set_margin_start(8); box.set_margin_end(8)
+        box.set_margin_top(5);   box.set_margin_bottom(5)
+
+        name_lbl = Gtk.Label(label=name)
+        name_lbl.set_halign(Gtk.Align.START)
+        name_lbl.set_hexpand(True)
+        box.pack_start(name_lbl, True, True, 0)
+
+        if size_bytes:
+            size_lbl = Gtk.Label(label=_human_size(size_bytes))
+            size_lbl.get_style_context().add_class('cal-dim')
+            box.pack_start(size_lbl, False, False, 0)
+
+        del_btn = Gtk.Button(label='Delete')
+        del_btn.connect('clicked', lambda _b, n=name, r=row: self._confirm_delete(n, r))
+        box.pack_start(del_btn, False, False, 0)
+
+        row.add(box)
+        self._models_lb.add(row)
+
+    # ── Model deletion ─────────────────────────────────────────────────────────
+
+    def _confirm_delete(self, name: str, row: Gtk.ListBoxRow):
+        dlg = Gtk.MessageDialog(
+            transient_for=self._win,
+            modal=True,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text=f'Delete "{name}"?',
+        )
+        dlg.format_secondary_text(
+            'This removes the model from disk.\n'
+            f'Re-download later with: ollama pull {name}'
+        )
+        response = dlg.run()
+        dlg.destroy()
+        if response == Gtk.ResponseType.YES:
+            row.set_sensitive(False)
+            threading.Thread(
+                target=self._delete_thread, args=(name, row), daemon=True
+            ).start()
+
+    def _delete_thread(self, name: str, row: Gtk.ListBoxRow):
+        try:
+            data = json.dumps({'name': name}).encode()
+            req  = urllib.request.Request(
+                f'{OLLAMA_API_BASE}/delete',
+                data=data,
+                headers={'Content-Type': 'application/json'},
+                method='DELETE',
+            )
+            urllib.request.urlopen(req, timeout=30)
+            GLib.idle_add(self._after_delete, row, None)
+        except Exception as exc:
+            GLib.idle_add(self._after_delete, row, str(exc))
+
+    def _after_delete(self, row: Gtk.ListBoxRow, error):
+        if error:
+            row.set_sensitive(True)
+            dlg = Gtk.MessageDialog(
+                transient_for=self._win, modal=True,
+                message_type=Gtk.MessageType.ERROR,
+                buttons=Gtk.ButtonsType.OK,
+                text='Delete failed',
+            )
+            dlg.format_secondary_text(error[:300])
+            dlg.run(); dlg.destroy()
+        else:
+            self._models_lb.remove(row)
+            # Refresh combo in case the deleted model was selected
+            threading.Thread(target=self._load_models_full, daemon=True).start()
         return False
 
 
