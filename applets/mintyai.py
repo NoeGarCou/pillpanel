@@ -222,7 +222,7 @@ body {
     font-size: 13px;
     line-height: 1.55;
     padding: 2px 8px 4px 8px;
-    overflow-x: hidden;
+    overflow: hidden;
     word-break: break-word;
 }
 p { margin: 0 0 5px; }
@@ -329,7 +329,10 @@ class _AsstBubble:
         wv.set_background_color(Gdk.RGBA(0, 0, 0, 0))
         wv.connect('context-menu', lambda *_: True)
         wv.connect('load-changed', self._on_load)
-        wv.set_size_request(POPUP_WIDTH - 16, 30)
+        # Rough initial height so there's no tiny-box flash before the real
+        # height is measured. Code responses get more space than prose.
+        est = 300 if '```' in self._text else max(60, self._text.count('\n') * 22)
+        wv.set_size_request(POPUP_WIDTH - 16, est)
         wv.load_html(_wk_page(_md_to_html(self._text)), None)
         self._wv = wv
         self.widget.add(wv)
@@ -337,17 +340,34 @@ class _AsstBubble:
 
     def _on_load(self, wv, event):
         if event == _WebKit2.LoadEvent.FINISHED:
-            wv.run_javascript(
-                'document.documentElement.scrollHeight',
-                None, self._on_height, None,
-            )
+            # Small delay so CSS layout settles before we measure
+            GLib.timeout_add(80, self._query_height, wv)
+
+    def _query_height(self, wv):
+        wv.run_javascript(
+            'Math.max(document.body.scrollHeight,'
+            '         document.documentElement.scrollHeight)',
+            None, self._on_height, None,
+        )
+        return False  # don't repeat
 
     def _on_height(self, source, result, _):
         try:
             h = source.run_javascript_finish(result).get_js_value().to_int32()
-            GLib.idle_add(source.set_size_request, POPUP_WIDTH - 16, h + 4)
+            GLib.idle_add(self._apply_height, source, h + 4)
         except Exception as exc:
             log.debug(f'[Minty] WebView height: {exc}')
+
+    def _apply_height(self, wv, h):
+        wv.set_size_request(POPUP_WIDTH - 16, h)
+        # Walk up to find the ListBox and tell it to reflow
+        w = wv
+        while w:
+            w = w.get_parent()
+            if isinstance(w, Gtk.ListBox):
+                w.queue_resize()
+                break
+        return False
 
 
 # ══════════════════════════════════════════════════════════════════════════════
