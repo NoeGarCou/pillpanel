@@ -132,7 +132,7 @@ class MintyAIApplet(Applet):
 
     def build(self):
         _install_css()
-        self._chat       = _ChatWidget()
+        self._chat       = _ChatWidget(self.panel)
         self._popup      = PanelPopup(self._chat.root)
         self._warm_timer = None
 
@@ -207,7 +207,8 @@ class MintyAIApplet(Applet):
 class _ChatWidget:
     """Self-contained chat UI. Instantiated once; lives on the applet."""
 
-    def __init__(self):
+    def __init__(self, panel):
+        self._panel         = panel
         self._model         = DEFAULT_MODEL
         self._system_prompt = SYSTEM_PROMPT
         self._history       = [{'role': 'system', 'content': self._system_prompt}]
@@ -532,7 +533,13 @@ class _SettingsWindow:
         vbox.pack_start(Gtk.Separator(), False, False, 0)
 
         btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        btn_row.set_halign(Gtk.Align.END)
+
+        panel_prefs_btn = Gtk.Button(label='Panel Preferences…')
+        panel_prefs_btn.connect('clicked', self._on_panel_prefs)
+        btn_row.pack_start(panel_prefs_btn, False, False, 0)
+
+        # spacer
+        btn_row.pack_start(Gtk.Box(), True, True, 0)
 
         apply_btn = Gtk.Button(label='Apply')
         apply_btn.connect('clicked', self._on_apply)
@@ -544,6 +551,11 @@ class _SettingsWindow:
 
         vbox.pack_start(btn_row, False, False, 0)
         win.show_all()
+
+    def _on_panel_prefs(self, _btn):
+        self._win.hide()
+        from applets.appmenu import PreferencesWindow
+        PreferencesWindow(self._chat._panel).present()
 
     def _on_apply(self, _btn):
         model = self._model_combo.get_active_text()
