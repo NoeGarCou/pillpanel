@@ -14,7 +14,7 @@ Replaces Cinnamon's built-in top panel. Features:
   • Show Desktop button
 
 Layout:
-  [AppMenu][Minty]  [Date  Time]         [Bat][Net][Vol] [Tray…] [Desktop]
+  [Minty]           [Date  Time]         [Bat][Net][Vol] [Tray…] [Desktop]
      left              center                        right
 
 Usage:
@@ -578,18 +578,17 @@ class PillPanel:
 
     def _load_applets(self):
         # Import here so D-Bus mainloop is already set
-        from applets.appmenu   import AppMenuApplet
-        from applets.mintyai   import MintyAIApplet
-        from applets.clock     import ClockApplet
-        from applets.battery   import BatteryApplet
-        from applets.network   import NetworkApplet
-        from applets.volume    import VolumeApplet
-        from applets.tray      import TrayApplet
+        from applets.mintyai     import MintyAIApplet
+        from applets.clock       import ClockApplet
+        from applets.battery     import BatteryApplet
+        from applets.network     import NetworkApplet
+        from applets.volume      import VolumeApplet
+        from applets.tray        import TrayApplet
         from applets.showdesktop import ShowDesktopApplet
+        from applets.appmenu     import PreferencesWindow
 
         specs = [
             # (class,              section)
-            (AppMenuApplet,     'left'),
             (MintyAIApplet,     'left'),
             (ClockApplet,       'center'),
             (BatteryApplet,     'right'),
@@ -615,6 +614,23 @@ class PillPanel:
                 )
 
         self._apply_icon_size()
+        self._setup_pill_menu(PreferencesWindow)
+
+    def _setup_pill_menu(self, PreferencesWindowClass):
+        self._prefs_cls = PreferencesWindowClass
+        self.window.pill.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.window.pill.connect('button-press-event', self._on_pill_click)
+
+    def _on_pill_click(self, _widget, event):
+        if event.button != 3:
+            return False
+        menu = Gtk.Menu()
+        item = Gtk.MenuItem(label='Preferences')
+        item.connect('activate', lambda _: self._prefs_cls(self).present())
+        menu.append(item)
+        menu.show_all()
+        menu.popup_at_pointer(event)
+        return True
 
     def _apply_icon_size(self):
         """Set pixel_size on every Gtk.Image in the pill to match config."""

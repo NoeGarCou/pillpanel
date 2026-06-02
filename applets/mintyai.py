@@ -94,6 +94,9 @@ button.minty-new-btn:hover {
 }
 """
 
+_MINT_GREEN = Gdk.RGBA(135 / 255, 192 / 255, 80 / 255, 1.0)
+_KEEP_ALIVE_SECS = 15 * 60
+
 _css_installed = False
 
 
@@ -111,22 +114,7 @@ def _install_css():
     _css_installed = True
 
 
-# ── Ollama helpers (called from background threads) ────────────────────────────
-
-def _warm_model(model: str):
-    try:
-        data = json.dumps(
-            {'model': model, 'prompt': '', 'keep_alive': KEEP_ALIVE}
-        ).encode()
-        req = urllib.request.Request(
-            f'{OLLAMA_API_BASE}/generate',
-            data=data,
-            headers={'Content-Type': 'application/json'},
-        )
-        urllib.request.urlopen(req, timeout=30)
-    except Exception:
-        pass
-
+# ── Ollama model list (called from background thread) ─────────────────────────
 
 def _fetch_models() -> list:
     req = urllib.request.Request(f'{OLLAMA_API_BASE}/tags')
@@ -144,37 +132,72 @@ class MintyAIApplet(Applet):
 
     def build(self):
         _install_css()
-        self._chat  = _ChatWidget()
-        self._popup = PanelPopup(self._chat.root)
+        self._chat       = _ChatWidget()
+        self._popup      = PanelPopup(self._chat.root)
+        self._warm_timer = None
 
         btn = Gtk.Button()
         btn.set_relief(Gtk.ReliefStyle.NONE)
         btn.set_focus_on_click(False)
         btn.get_style_context().add_class('panel-btn')
+        btn.get_style_context().add_class('appmenu-btn')
         btn.set_tooltip_text('Minty AI')
 
         self._btn_icon = Gtk.Image.new_from_icon_name(
-            'dialog-question-symbolic', Gtk.IconSize.SMALL_TOOLBAR
+            'linuxmint-logo-ring-symbolic', Gtk.IconSize.SMALL_TOOLBAR
         )
         btn.add(self._btn_icon)
         btn.connect('clicked', self._on_click)
         return btn
 
     def after_icon_size(self):
-        self._btn_icon.set_pixel_size(self.panel.config.get('icon_size', 16))
+        px = self.panel.config.get('appmenu_btn_icon_size', 16)
+        self._btn_icon.set_pixel_size(px)
 
     def _on_click(self, btn):
         if not self._popup._visible:
-            threading.Thread(
-                target=_warm_model,
-                args=(self._chat.current_model,),
-                daemon=True,
-            ).start()
+            threading.Thread(target=self._do_warm, daemon=True).start()
             GLib.idle_add(self._chat.entry.grab_focus)
         self._popup.toggle(btn)
 
+    # ── Warm-up ───────────────────────────────────────────────────────────────
+
+    def _do_warm(self):
+        try:
+            data = json.dumps({
+                'model': self._chat.current_model,
+                'prompt': '',
+                'keep_alive': KEEP_ALIVE,
+            }).encode()
+            req = urllib.request.Request(
+                f'{OLLAMA_API_BASE}/generate',
+                data=data,
+                headers={'Content-Type': 'application/json'},
+            )
+            urllib.request.urlopen(req, timeout=30)
+            GLib.idle_add(self._set_icon_warm)
+        except Exception:
+            pass
+
+    def _set_icon_warm(self):
+        self._btn_icon.override_color(Gtk.StateFlags.NORMAL, _MINT_GREEN)
+        if self._warm_timer:
+            GLib.source_remove(self._warm_timer)
+        self._warm_timer = GLib.timeout_add_seconds(
+            _KEEP_ALIVE_SECS, self._on_warm_expired
+        )
+        return False
+
+    def _on_warm_expired(self):
+        self._btn_icon.override_color(Gtk.StateFlags.NORMAL, None)
+        self._warm_timer = None
+        return False
+
     def destroy(self):
         self._chat.cancel()
+        if self._warm_timer:
+            GLib.source_remove(self._warm_timer)
+            self._warm_timer = None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
