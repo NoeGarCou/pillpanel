@@ -218,9 +218,9 @@ _WK_CSS = """
 body {
     background: transparent;
     color: rgba(255,255,255,0.92);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-family: sans-serif;
     font-size: 13px;
-    line-height: 1.55;
+    line-height: 1.4;
     padding: 2px 8px 4px 8px;
     overflow: hidden;
     word-break: break-word;
@@ -327,7 +327,15 @@ class _AsstBubble:
     def _upgrade(self):
         self.widget.remove(self._lbl)
         wv = _WebKit2.WebView()
-        wv.get_settings().set_enable_javascript(True)
+        s  = wv.get_settings()
+        s.set_enable_javascript(True)
+        s.set_default_font_size(13)
+        s.set_default_monospace_font_size(12)
+        # Use the same font family as GTK
+        gtk_font = Gtk.Settings.get_default().get_property('gtk-font-name') or ''
+        family   = gtk_font.rsplit(' ', 1)[0] if gtk_font else 'sans-serif'
+        s.set_default_font_family(family)
+        s.set_sans_serif_font_family(family)
         wv.set_background_color(Gdk.RGBA(0, 0, 0, 0))
         wv.connect('context-menu', lambda *_: True)
         wv.connect('load-changed', self._on_load)
