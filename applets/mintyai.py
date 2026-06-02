@@ -1,7 +1,9 @@
 """applets/mintyai.py — Minty AI chat applet for PillPanel."""
 
+import html as _html
 import json
 import logging
+import re
 import threading
 import urllib.request
 
@@ -123,6 +125,231 @@ def _fetch_models() -> list:
     return [m['name'] for m in data.get('models', [])]
 
 
+# ── WebKit2 (optional — markdown rendering) ───────────────────────────────────
+
+_WebKit2 = None
+for _wk_ver in ('4.1', '4.0'):
+    try:
+        gi.require_version('WebKit2', _wk_ver)
+        from gi.repository import WebKit2 as _WebKit2
+        break
+    except Exception:
+        pass
+_HAS_WEBKIT = _WebKit2 is not None
+
+# ── Markdown → HTML ────────────────────────────────────────────────────────────
+
+def _has_md(text: str) -> bool:
+    return bool(re.search(r'```|`[^`]|\*\*|^#{1,3} |^[-*+] |^\d+[.)]\s', text, re.M))
+
+
+def _inline(text: str) -> str:
+    """Inline markdown on already-HTML-escaped text: inline code, bold, italic."""
+    parts  = re.split(r'`([^`]+)`', text)
+    result = []
+    for i, p in enumerate(parts):
+        if i % 2:
+            result.append(f'<code>{_html.escape(p)}</code>')
+        else:
+            s = _html.escape(p)
+            s = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', s)
+            s = re.sub(r'\*(.+?)\*',     r'<em>\1</em>',          s)
+            result.append(s)
+    return ''.join(result)
+
+
+def _md_to_html(text: str) -> str:
+    """Convert LLM markdown to safe HTML (no external deps)."""
+    blocks = []
+
+    def pull_block(m):
+        lang = m.group(1).strip()
+        code = _html.escape(m.group(2).rstrip('\n'))
+        blocks.append((lang, code))
+        return f'\x00B{len(blocks)-1}\x00'
+
+    text = re.sub(r'```([^\n`]*)\n?(.*?)```', pull_block, text, flags=re.DOTALL)
+
+    out, in_ul, in_ol = [], False, False
+
+    def close_lists():
+        nonlocal in_ul, in_ol
+        if in_ul: out.append('</ul>'); in_ul = False
+        if in_ol: out.append('</ol>'); in_ol = False
+
+    for line in text.split('\n'):
+        if '\x00B' in line:
+            close_lists(); out.append(line); continue
+        if m := re.match(r'^(#{1,3}) (.+)', line):
+            close_lists()
+            n = len(m.group(1))
+            out.append(f'<h{n}>{_inline(m.group(2))}</h{n}>'); continue
+        if m := re.match(r'^[ \t]*[-*+] (.+)', line):
+            if in_ol: out.append('</ol>'); in_ol = False
+            if not in_ul: out.append('<ul>'); in_ul = True
+            out.append(f'<li>{_inline(m.group(1))}</li>'); continue
+        if m := re.match(r'^[ \t]*\d+[.)]\s+(.+)', line):
+            if in_ul: out.append('</ul>'); in_ul = False
+            if not in_ol: out.append('<ol>'); in_ol = True
+            out.append(f'<li>{_inline(m.group(1))}</li>'); continue
+        close_lists()
+        s = line.strip()
+        if not s:
+            out.append('<br>'); continue
+        out.append(f'<p>{_inline(s)}</p>')
+
+    close_lists()
+    result = '\n'.join(out)
+
+    for i, (lang, code) in enumerate(blocks):
+        lc = f' class="lang-{lang}"' if lang else ''
+        result = result.replace(
+            f'\x00B{i}\x00',
+            f'<div class="cb">'
+            f'<button class="cp" onclick="cpBlock(this)">Copy</button>'
+            f'<pre><code{lc}>{code}</code></pre>'
+            f'</div>',
+        )
+    return result
+
+
+_WK_CSS = """
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    background: transparent;
+    color: rgba(255,255,255,0.92);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 13px;
+    line-height: 1.55;
+    padding: 2px 8px 4px 8px;
+    overflow-x: hidden;
+    word-break: break-word;
+}
+p { margin: 0 0 5px; }
+p:last-child { margin-bottom: 0; }
+h1, h2, h3 { font-size: 14px; font-weight: 600; margin: 6px 0 3px; }
+h1 { font-size: 15px; }
+ul, ol { padding-left: 18px; margin: 3px 0 5px; }
+li { margin: 1px 0; }
+br { display: block; content: ''; margin-top: 3px; }
+.cb { position: relative; margin: 6px 0; }
+pre {
+    background: rgba(0,0,0,0.35);
+    border-radius: 7px;
+    padding: 10px 12px;
+    overflow-x: auto;
+    white-space: pre;
+    font-size: 12px;
+    line-height: 1.45;
+}
+code { font-family: 'Cascadia Code','JetBrains Mono','Fira Code',monospace; }
+p > code, li > code {
+    background: rgba(0,0,0,0.28);
+    border-radius: 3px;
+    padding: 1px 5px;
+}
+.cp {
+    position: absolute;
+    top: 7px; right: 7px;
+    background: rgba(255,255,255,0.10);
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 4px;
+    color: rgba(255,255,255,0.60);
+    cursor: pointer;
+    font: 11px/1 inherit;
+    padding: 3px 8px;
+}
+.cp:hover { background: rgba(255,255,255,0.20); color: white; }
+.cp.ok    { color: #87c050; border-color: #87c050; }
+::-webkit-scrollbar { height: 4px; width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.22); border-radius: 2px; }
+"""
+
+_WK_JS = """
+function cpBlock(btn) {
+    var code = btn.nextElementSibling.querySelector('code') || btn.nextElementSibling;
+    var ta   = document.createElement('textarea');
+    ta.value = code.textContent;
+    ta.style.cssText = 'position:fixed;top:-9999px;left:0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch(e) {}
+    document.body.removeChild(ta);
+    btn.textContent = '✓ Copied'; btn.classList.add('ok');
+    setTimeout(function(){ btn.textContent='Copy'; btn.classList.remove('ok'); }, 2000);
+}
+"""
+
+
+def _wk_page(content: str) -> str:
+    return (f'<!DOCTYPE html><html><head><meta charset="UTF-8">'
+            f'<style>{_WK_CSS}</style></head>'
+            f'<body>{content}'
+            f'<script>{_WK_JS}</script></body></html>')
+
+
+# ── Assistant bubble ───────────────────────────────────────────────────────────
+
+class _AsstBubble:
+    """
+    Streams text into a Gtk.Label; upgrades to a WebKit2.WebView on finalize()
+    when the response contains markdown worth rendering.
+    """
+
+    def __init__(self):
+        self.widget = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.widget.set_margin_start(8)
+        self.widget.set_margin_end(8)
+        self.widget.set_margin_top(2)
+        self.widget.set_margin_bottom(2)
+
+        self._text = ''
+        self._lbl  = Gtk.Label()
+        self._lbl.set_line_wrap(True)
+        self._lbl.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        self._lbl.set_xalign(0)
+        self._lbl.set_selectable(True)
+        self._lbl.set_max_width_chars(42)
+        self._lbl.get_style_context().add_class('minty-msg')
+        self.widget.add(self._lbl)
+        self.widget.show_all()
+
+    def append(self, token: str):
+        self._text += token
+        self._lbl.set_text(self._text)
+
+    def finalize(self):
+        if self._text and _HAS_WEBKIT and _has_md(self._text):
+            self._upgrade()
+
+    def _upgrade(self):
+        self.widget.remove(self._lbl)
+        wv = _WebKit2.WebView()
+        wv.get_settings().set_enable_javascript(True)
+        wv.set_background_color(Gdk.RGBA(0, 0, 0, 0))
+        wv.connect('context-menu', lambda *_: True)
+        wv.connect('load-changed', self._on_load)
+        wv.set_size_request(POPUP_WIDTH - 16, 30)
+        wv.load_html(_wk_page(_md_to_html(self._text)), None)
+        self._wv = wv
+        self.widget.add(wv)
+        wv.show()
+
+    def _on_load(self, wv, event):
+        if event == _WebKit2.LoadEvent.FINISHED:
+            wv.run_javascript(
+                'document.documentElement.scrollHeight',
+                None, self._on_height, None,
+            )
+
+    def _on_height(self, source, result, _):
+        try:
+            h = source.run_javascript_finish(result).get_js_value().to_int32()
+            GLib.idle_add(source.set_size_request, POPUP_WIDTH - 16, h + 4)
+        except Exception as exc:
+            log.debug(f'[Minty] WebView height: {exc}')
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Applet
 # ══════════════════════════════════════════════════════════════════════════════
@@ -214,7 +441,7 @@ class _ChatWidget:
         self._history       = [{'role': 'system', 'content': self._system_prompt}]
         self._is_sending    = False
         self._is_cancelled  = False
-        self._asst_lbl      = None   # Gtk.Label being streamed into
+        self._asst_bubble   = None   # _AsstBubble being streamed into
         self._asst_text     = ''     # accumulated text for the current response
         self.root           = self._build()
 
@@ -327,8 +554,8 @@ class _ChatWidget:
         self.entry.set_text('')
         self._history.append({'role': 'user', 'content': text})
         self._add_bubble(text, is_user=True)
-        self._asst_text    = ''
-        self._asst_lbl     = self._add_bubble('', is_user=False)
+        self._asst_text   = ''
+        self._asst_bubble = self._add_bubble('', is_user=False)
         self._is_cancelled = False
         self._set_sending(True)
         self._status_lbl.set_text('Thinking…')
@@ -373,8 +600,8 @@ class _ChatWidget:
 
     def _on_token(self, token: str):
         self._asst_text += token
-        if self._asst_lbl:
-            self._asst_lbl.set_text(self._asst_text)
+        if self._asst_bubble:
+            self._asst_bubble.append(token)
         self._scroll_bottom()
         return False
 
@@ -383,29 +610,30 @@ class _ChatWidget:
             self._history.append(
                 {'role': 'assistant', 'content': self._asst_text}
             )
+        if self._asst_bubble:
+            self._asst_bubble.finalize()
         self._status_lbl.set_text('')
         self._set_sending(False)
-        self._asst_lbl = None
+        self._asst_bubble = None
         self._scroll_bottom()
         return False
 
     def _on_error(self, msg: str):
-        # Remove the empty assistant bubble if nothing was streamed
-        if not self._asst_text and self._asst_lbl:
-            # walk: label → bubble_box → hbox → ListBoxRow
-            row = self._asst_lbl.get_parent()
-            for _ in range(2):
-                row = row.get_parent() if row else None
+        if not self._asst_text and self._asst_bubble:
+            # walk: container widget → hbox → ListBoxRow
+            row = self._asst_bubble.widget.get_parent()
+            if row:
+                row = row.get_parent()
             if row and isinstance(row, Gtk.ListBoxRow):
                 self._list_box.remove(row)
-        self._asst_lbl = None
+        self._asst_bubble = None
         self._status_lbl.set_text(msg)
         self._set_sending(False)
         return False
 
     # ── UI helpers ────────────────────────────────────────────────────────────
 
-    def _add_bubble(self, text: str, is_user: bool) -> Gtk.Label:
+    def _add_bubble(self, text: str, is_user: bool):
         row = Gtk.ListBoxRow()
         row.set_selectable(False)
         row.override_background_color(
@@ -416,35 +644,35 @@ class _ChatWidget:
         hbox.set_margin_top(3)
         hbox.set_margin_bottom(3)
 
-        bubble = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        bubble.get_style_context().add_class(
-            'minty-user' if is_user else 'minty-asst'
-        )
-
-        lbl = Gtk.Label(label=text)
-        lbl.set_line_wrap(True)
-        lbl.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
-        lbl.set_xalign(0)
-        lbl.set_selectable(True)
-        lbl.set_max_width_chars(40)
-        lbl.get_style_context().add_class('minty-msg')
-        bubble.add(lbl)
-
-        spacer = Gtk.Box()
-        spacer.set_hexpand(True)
-
         if is_user:
+            bubble = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            bubble.get_style_context().add_class('minty-user')
+            lbl = Gtk.Label(label=text)
+            lbl.set_line_wrap(True)
+            lbl.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+            lbl.set_xalign(0)
+            lbl.set_selectable(True)
+            lbl.set_max_width_chars(40)
+            lbl.get_style_context().add_class('minty-msg')
+            bubble.add(lbl)
+            spacer = Gtk.Box()
+            spacer.set_hexpand(True)
             hbox.pack_start(spacer, True, True, 0)
             hbox.pack_start(bubble, False, False, 8)
-        else:
-            hbox.pack_start(bubble, False, False, 8)
-            hbox.pack_start(spacer, True, True, 0)
+            row.add(hbox)
+            self._list_box.add(row)
+            row.show_all()
+            self._scroll_bottom()
+            return None
 
-        row.add(hbox)
-        self._list_box.add(row)
-        row.show_all()
-        self._scroll_bottom()
-        return lbl
+        else:
+            asst = _AsstBubble()
+            hbox.pack_start(asst.widget, True, True, 0)
+            row.add(hbox)
+            self._list_box.add(row)
+            row.show_all()
+            self._scroll_bottom()
+            return asst
 
     def _scroll_bottom(self):
         GLib.idle_add(self._do_scroll)
