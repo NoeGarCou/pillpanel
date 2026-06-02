@@ -20,7 +20,7 @@ log = logging.getLogger('pillpanel.mintyai')
 # ── Config ─────────────────────────────────────────────────────────────────────
 OLLAMA_BASE_URL = 'http://localhost:11434/v1'
 OLLAMA_API_BASE = 'http://localhost:11434/api'
-DEFAULT_MODEL   = 'qwen2.5:14b'
+DEFAULT_MODEL   = 'qwen3:14b'
 KEEP_ALIVE      = '15m'
 POPUP_WIDTH     = 400
 CHAT_HEIGHT     = 460
@@ -485,7 +485,7 @@ class _ChatWidget:
 
     def __init__(self, panel):
         self._panel         = panel
-        self._model         = DEFAULT_MODEL
+        self._model         = panel.config.get('minty_model', DEFAULT_MODEL)
         self._system_prompt = SYSTEM_PROMPT
         self._history       = [{'role': 'system', 'content': self._system_prompt}]
         self._popup_width   = panel.config.get('minty_popup_width', POPUP_WIDTH)
@@ -944,6 +944,7 @@ class _SettingsWindow:
         model = self._model_combo.get_active_text()
         if model:
             self._chat._model = model
+            self._chat._panel.config['minty_model'] = model
 
         buf    = self._prompt_view.get_buffer()
         prompt = buf.get_text(
