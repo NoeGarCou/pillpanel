@@ -494,8 +494,6 @@ class _ChatWidget:
         self._is_cancelled  = False
         self._asst_bubble   = None   # _AsstBubble being streamed into
         self._asst_text     = ''     # accumulated text for the current response
-        self._think_buf     = ''     # partial token buffer for <think> filtering
-        self._in_think      = False  # currently inside a <think> block
         self.root           = self._build()
 
     # ── Public ────────────────────────────────────────────────────────────────
@@ -509,9 +507,7 @@ class _ChatWidget:
 
     def new_chat(self):
         self.cancel()
-        self._history   = [{'role': 'system', 'content': self._system_prompt}]
-        self._think_buf = ''
-        self._in_think  = False
+        self._history = [{'role': 'system', 'content': self._system_prompt}]
         for row in self._list_box.get_children():
             self._list_box.remove(row)
         self._status_lbl.set_text('')
@@ -623,8 +619,6 @@ class _ChatWidget:
         self._history.append({'role': 'user', 'content': text})
         self._add_bubble(text, is_user=True)
         self._asst_text   = ''
-        self._think_buf   = ''
-        self._in_think    = False
         self._asst_bubble = self._add_bubble('', is_user=False)
         self._is_cancelled = False
         self._set_sending(True)
@@ -637,28 +631,54 @@ class _ChatWidget:
         ).start()
 
     def _stream_thread(self, messages: list, model: str, think: bool):
-        try:
-            try:
-                import openai
-            except ImportError:
-                GLib.idle_add(
-                    self._on_error,
-                    'openai package missing.\nRun: pip install openai',
-                )
-                return
+        """Stream from Ollama's native /api/chat endpoint.
 
-            client = openai.OpenAI(base_url=OLLAMA_BASE_URL, api_key='ollama')
-            stream = client.chat.completions.create(
-                model=model, messages=messages, stream=True,
-                extra_body={'think': think},
+        The native API returns thinking and content as separate fields,
+        so we get clean separation without any tag-parsing hacks.
+        """
+        try:
+            data = json.dumps({
+                'model':    model,
+                'messages': messages,
+                'stream':   True,
+                'think':    think,
+            }).encode()
+            req = urllib.request.Request(
+                f'{OLLAMA_API_BASE}/chat',
+                data=data,
+                headers={'Content-Type': 'application/json'},
             )
-            for chunk in stream:
-                if self._is_cancelled:
-                    stream.close()
-                    break
-                delta = chunk.choices[0].delta.content
-                if delta:
-                    GLib.idle_add(self._on_token, delta)
+            _thinking_started = False
+            with urllib.request.urlopen(req, timeout=300) as resp:
+                for raw in resp:
+                    if self._is_cancelled:
+                        break
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    try:
+                        chunk = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    msg = chunk.get('message', {})
+
+                    # thinking field → show status, discard from display
+                    if msg.get('thinking'):
+                        if not _thinking_started:
+                            _thinking_started = True
+                            GLib.idle_add(self._status_lbl.set_text, 'Thinking…')
+
+                    # content field → actual response to show
+                    content = msg.get('content') or ''
+                    if content:
+                        if _thinking_started:
+                            _thinking_started = False
+                            GLib.idle_add(self._status_lbl.set_text, '')
+                        GLib.idle_add(self._on_token, content)
+
+                    if chunk.get('done'):
+                        break
 
             GLib.idle_add(self._on_done)
 
@@ -671,54 +691,13 @@ class _ChatWidget:
     # ── GTK-thread callbacks ───────────────────────────────────────────────────
 
     def _on_token(self, token: str):
-        self._think_buf += token
-        self._flush_think_buf()
+        self._asst_text += token
+        if self._asst_bubble:
+            self._asst_bubble.append(token)
+        self._scroll_bottom()
         return False
 
-    def _flush_think_buf(self):
-        """State machine: filter <think>…</think> blocks from the token stream."""
-        while True:
-            if not self._in_think:
-                idx = self._think_buf.find('<think>')
-                if idx == -1:
-                    # No opening tag — emit everything except a 6-char tail that
-                    # might be the start of an incomplete '<think>' tag.
-                    safe = max(0, len(self._think_buf) - 6)
-                    if safe:
-                        self._emit_token(self._think_buf[:safe])
-                        self._think_buf = self._think_buf[safe:]
-                    break
-                else:
-                    if idx > 0:
-                        self._emit_token(self._think_buf[:idx])
-                    self._think_buf = self._think_buf[idx + 7:]
-                    self._in_think  = True
-                    self._status_lbl.set_text('Thinking…')
-            else:
-                idx = self._think_buf.find('</think>')
-                if idx == -1:
-                    # Still inside think block — discard, keep tail for partial tag
-                    self._think_buf = self._think_buf[-7:]
-                    break
-                else:
-                    self._think_buf = self._think_buf[idx + 8:]
-                    self._in_think  = False
-                    self._status_lbl.set_text('')
-
-    def _emit_token(self, text: str):
-        if not text:
-            return
-        self._asst_text += text
-        if self._asst_bubble:
-            self._asst_bubble.append(text)
-        self._scroll_bottom()
-
     def _on_done(self):
-        # Flush any remaining non-think buffer
-        if self._think_buf and not self._in_think:
-            self._emit_token(self._think_buf)
-        self._think_buf = ''
-        self._in_think  = False
         if self._asst_text:
             self._history.append(
                 {'role': 'assistant', 'content': self._asst_text}
@@ -732,8 +711,6 @@ class _ChatWidget:
         return False
 
     def _on_error(self, msg: str):
-        self._think_buf = ''
-        self._in_think  = False
         if not self._asst_text and self._asst_bubble:
             row = self._asst_bubble.widget.get_parent()
             if row:
