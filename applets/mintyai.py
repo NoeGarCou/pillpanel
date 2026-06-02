@@ -300,6 +300,36 @@ p > code, li > code {
 ::-webkit-scrollbar { height: 4px; width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.22); border-radius: 2px; }
+details.thinking {
+    border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 6px;
+    margin-bottom: 8px;
+    overflow: hidden;
+}
+details.thinking > summary {
+    cursor: pointer;
+    padding: 5px 10px;
+    color: rgba(255,255,255,0.42);
+    font-size: 11px;
+    user-select: none;
+    list-style: none;
+    outline: none;
+}
+details.thinking > summary::-webkit-details-marker { display: none; }
+details.thinking > summary::before { content: '▶  '; font-size: 9px; }
+details.thinking[open] > summary::before { content: '▼  '; }
+details.thinking > summary:hover { color: rgba(255,255,255,0.65); background: rgba(255,255,255,0.04); }
+.think-content {
+    padding: 8px 12px;
+    border-top: 1px solid rgba(255,255,255,0.07);
+    color: rgba(255,255,255,0.38);
+    font-size: 11px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.4;
+    max-height: 220px;
+    overflow-y: auto;
+}
 """
 
 _WK_JS = """
@@ -356,18 +386,17 @@ class _AsstBubble:
         self._text += token
         self._lbl.set_text(self._text)
 
-    def finalize(self):
-        if self._text and _HAS_WEBKIT and _has_md(self._text):
-            self._upgrade()
+    def finalize(self, thinking: str = ''):
+        if _HAS_WEBKIT and (thinking or _has_md(self._text)):
+            self._upgrade(thinking)
 
-    def _upgrade(self):
+    def _upgrade(self, thinking: str = ''):
         self.widget.remove(self._lbl)
         wv = _WebKit2.WebView()
         s  = wv.get_settings()
         s.set_enable_javascript(True)
         s.set_default_font_size(13)
         s.set_default_monospace_font_size(12)
-        # Use the same font family as GTK
         gtk_font = Gtk.Settings.get_default().get_property('gtk-font-name') or ''
         family   = gtk_font.rsplit(' ', 1)[0] if gtk_font else 'sans-serif'
         s.set_default_font_family(family)
@@ -375,11 +404,20 @@ class _AsstBubble:
         wv.set_background_color(Gdk.RGBA(0, 0, 0, 0))
         wv.connect('context-menu', lambda *_: True)
         wv.connect('load-changed', self._on_load)
-        # Rough initial height so there's no tiny-box flash before the real
-        # height is measured. Code responses get more space than prose.
-        est = 300 if '```' in self._text else max(60, self._text.count('\n') * 22)
+        est = 300 if ('```' in self._text or thinking) else max(60, self._text.count('\n') * 22)
         wv.set_size_request(self._popup_width - 16, est)
-        wv.load_html(_wk_page(_md_to_html(self._text)), None)
+        # Build page: optional collapsible thinking block + rendered content
+        parts = []
+        if thinking:
+            esc = _html.escape(thinking)
+            parts.append(
+                f'<details class="thinking" open>'
+                f'<summary>Thinking</summary>'
+                f'<div class="think-content">{esc}</div>'
+                f'</details>'
+            )
+        parts.append(_md_to_html(self._text) if self._text else '')
+        wv.load_html(_wk_page(''.join(parts)), None)
         self._wv = wv
         self.widget.add(wv)
         wv.show()
@@ -412,9 +450,10 @@ class _AsstBubble:
             if isinstance(w, Gtk.ListBox):
                 w.queue_resize()
                 break
-        # Scroll to bottom AFTER the layout reflow so the new content is visible
+        # Scroll after layout reflow settles (idle_add is too soon after queue_resize)
         if self._scroll_fn:
-            GLib.idle_add(self._scroll_fn)
+            fn = self._scroll_fn
+            GLib.timeout_add(300, lambda: fn() or False)
         return False
 
 
@@ -427,7 +466,8 @@ class MintyAIApplet(Applet):
 
     def build(self):
         _install_css()
-        self._chat  = _ChatWidget(self.panel)
+        self._chat  = _ChatWidget(self.panel,
+                                  popup_visible_fn=lambda: self._popup._visible)
         self._popup = PanelPopup(self._chat.root)
 
         btn = Gtk.Button()
@@ -483,18 +523,20 @@ class MintyAIApplet(Applet):
 class _ChatWidget:
     """Self-contained chat UI. Instantiated once; lives on the applet."""
 
-    def __init__(self, panel):
-        self._panel         = panel
-        self._model         = panel.config.get('minty_model', DEFAULT_MODEL)
-        self._system_prompt = SYSTEM_PROMPT
-        self._history       = [{'role': 'system', 'content': self._system_prompt}]
-        self._popup_width   = panel.config.get('minty_popup_width', POPUP_WIDTH)
-        self._chat_height   = panel.config.get('minty_chat_height', CHAT_HEIGHT)
-        self._is_sending    = False
-        self._is_cancelled  = False
-        self._asst_bubble   = None   # _AsstBubble being streamed into
-        self._asst_text     = ''     # accumulated text for the current response
-        self.root           = self._build()
+    def __init__(self, panel, popup_visible_fn=None):
+        self._panel             = panel
+        self._popup_visible_fn  = popup_visible_fn or (lambda: True)
+        self._model             = panel.config.get('minty_model', DEFAULT_MODEL)
+        self._system_prompt     = SYSTEM_PROMPT
+        self._history           = [{'role': 'system', 'content': self._system_prompt}]
+        self._popup_width       = panel.config.get('minty_popup_width', POPUP_WIDTH)
+        self._chat_height       = panel.config.get('minty_chat_height', CHAT_HEIGHT)
+        self._is_sending        = False
+        self._is_cancelled      = False
+        self._asst_bubble       = None
+        self._asst_text         = ''
+        self._asst_thinking     = ''   # accumulated thinking tokens
+        self.root               = self._build()
 
     # ── Public ────────────────────────────────────────────────────────────────
 
@@ -507,7 +549,8 @@ class _ChatWidget:
 
     def new_chat(self):
         self.cancel()
-        self._history = [{'role': 'system', 'content': self._system_prompt}]
+        self._history       = [{'role': 'system', 'content': self._system_prompt}]
+        self._asst_thinking = ''
         for row in self._list_box.get_children():
             self._list_box.remove(row)
         self._status_lbl.set_text('')
@@ -618,8 +661,9 @@ class _ChatWidget:
         self.entry.set_text('')
         self._history.append({'role': 'user', 'content': text})
         self._add_bubble(text, is_user=True)
-        self._asst_text   = ''
-        self._asst_bubble = self._add_bubble('', is_user=False)
+        self._asst_text     = ''
+        self._asst_thinking = ''
+        self._asst_bubble   = self._add_bubble('', is_user=False)
         self._is_cancelled = False
         self._set_sending(True)
         self._status_lbl.set_text('Generating…')
@@ -663,11 +707,13 @@ class _ChatWidget:
 
                     msg = chunk.get('message', {})
 
-                    # thinking field → show status, discard from display
-                    if msg.get('thinking'):
+                    # thinking field → accumulate for collapsible display later
+                    thinking_delta = msg.get('thinking') or ''
+                    if thinking_delta:
                         if not _thinking_started:
                             _thinking_started = True
                             GLib.idle_add(self._status_lbl.set_text, 'Thinking…')
+                        GLib.idle_add(self._on_thinking_token, thinking_delta)
 
                     # content field → actual response to show
                     content = msg.get('content') or ''
@@ -690,6 +736,10 @@ class _ChatWidget:
 
     # ── GTK-thread callbacks ───────────────────────────────────────────────────
 
+    def _on_thinking_token(self, token: str):
+        self._asst_thinking += token
+        return False
+
     def _on_token(self, token: str):
         self._asst_text += token
         if self._asst_bubble:
@@ -703,14 +753,34 @@ class _ChatWidget:
                 {'role': 'assistant', 'content': self._asst_text}
             )
         if self._asst_bubble:
-            self._asst_bubble.finalize()
+            self._asst_bubble.finalize(self._asst_thinking)
         self._status_lbl.set_text('')
         self._set_sending(False)
         self._asst_bubble = None
         self._scroll_bottom()
+        # Notify if the popup is closed
+        if not self._popup_visible_fn():
+            self._notify_done()
         return False
 
+    def _notify_done(self):
+        import subprocess
+        preview = self._asst_text[:100].strip().replace('\n', ' ')
+        if len(self._asst_text) > 100:
+            preview += '…'
+        try:
+            subprocess.Popen([
+                'notify-send',
+                '--icon=dialog-information',
+                '--expire-time=6000',
+                'Minty',
+                preview or 'Response ready.',
+            ])
+        except Exception:
+            pass
+
     def _on_error(self, msg: str):
+        self._asst_thinking = ''
         if not self._asst_text and self._asst_bubble:
             row = self._asst_bubble.widget.get_parent()
             if row:
