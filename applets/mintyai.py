@@ -94,10 +94,30 @@ button.minty-new-btn:hover {
     background: rgba(255,255,255,0.07);
     color: rgba(255,255,255,0.85);
 }
+button.minty-think-btn {
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.16);
+    box-shadow: none;
+    border-radius: 12px;
+    color: rgba(255,255,255,0.60);
+    font-size: 11px;
+    padding: 2px 10px;
+    min-height: 20px;
+    min-width: 0;
+}
+button.minty-think-btn:hover {
+    background: rgba(255,255,255,0.07);
+    color: rgba(255,255,255,0.85);
+}
+button.minty-think-btn:checked {
+    background: rgba(135, 192, 80, 0.15);
+    border-color: rgba(135, 192, 80, 0.50);
+    color: #87c050;
+}
+button.minty-think-btn:checked:hover {
+    background: rgba(135, 192, 80, 0.22);
+}
 """
-
-_MINT_GREEN = Gdk.RGBA(135 / 255, 192 / 255, 80 / 255, 1.0)
-_KEEP_ALIVE_SECS = 15 * 60
 
 _css_installed = False
 
@@ -407,9 +427,8 @@ class MintyAIApplet(Applet):
 
     def build(self):
         _install_css()
-        self._chat       = _ChatWidget(self.panel)
-        self._popup      = PanelPopup(self._chat.root)
-        self._warm_timer = None
+        self._chat  = _ChatWidget(self.panel)
+        self._popup = PanelPopup(self._chat.root)
 
         btn = Gtk.Button()
         btn.set_relief(Gtk.ReliefStyle.NONE)
@@ -450,29 +469,11 @@ class MintyAIApplet(Applet):
                 headers={'Content-Type': 'application/json'},
             )
             urllib.request.urlopen(req, timeout=30)
-            GLib.idle_add(self._set_icon_warm)
         except Exception:
             pass
 
-    def _set_icon_warm(self):
-        self._btn_icon.override_color(Gtk.StateFlags.NORMAL, _MINT_GREEN)
-        if self._warm_timer:
-            GLib.source_remove(self._warm_timer)
-        self._warm_timer = GLib.timeout_add_seconds(
-            _KEEP_ALIVE_SECS, self._on_warm_expired
-        )
-        return False
-
-    def _on_warm_expired(self):
-        self._btn_icon.override_color(Gtk.StateFlags.NORMAL, None)
-        self._warm_timer = None
-        return False
-
     def destroy(self):
         self._chat.cancel()
-        if self._warm_timer:
-            GLib.source_remove(self._warm_timer)
-            self._warm_timer = None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -493,6 +494,8 @@ class _ChatWidget:
         self._is_cancelled  = False
         self._asst_bubble   = None   # _AsstBubble being streamed into
         self._asst_text     = ''     # accumulated text for the current response
+        self._think_buf     = ''     # partial token buffer for <think> filtering
+        self._in_think      = False  # currently inside a <think> block
         self.root           = self._build()
 
     # ── Public ────────────────────────────────────────────────────────────────
@@ -506,7 +509,9 @@ class _ChatWidget:
 
     def new_chat(self):
         self.cancel()
-        self._history = [{'role': 'system', 'content': self._system_prompt}]
+        self._history   = [{'role': 'system', 'content': self._system_prompt}]
+        self._think_buf = ''
+        self._in_think  = False
         for row in self._list_box.get_children():
             self._list_box.remove(row)
         self._status_lbl.set_text('')
@@ -540,6 +545,13 @@ class _ChatWidget:
         ))
         settings_btn.connect('clicked', lambda _: _SettingsWindow.open(self))
         hdr.pack_start(settings_btn, False, False, 0)
+
+        self._think_btn = Gtk.ToggleButton(label='Think')
+        self._think_btn.set_relief(Gtk.ReliefStyle.NONE)
+        self._think_btn.get_style_context().add_class('minty-think-btn')
+        self._think_btn.set_active(False)
+        self._think_btn.set_tooltip_text('Enable thinking mode (qwen3)')
+        hdr.pack_start(self._think_btn, False, False, 0)
 
         new_btn = Gtk.Button(label='New chat')
         new_btn.set_relief(Gtk.ReliefStyle.NONE)
@@ -608,9 +620,14 @@ class _ChatWidget:
         if not text:
             return
         self.entry.set_text('')
-        self._history.append({'role': 'user', 'content': text})
+        # Apply think-mode prefix to API content; display shows original text
+        think_on   = self._think_btn.get_active()
+        api_text   = ('/think ' if think_on else '/no_think ') + text
+        self._history.append({'role': 'user', 'content': api_text})
         self._add_bubble(text, is_user=True)
-        self._asst_text   = ''
+        self._asst_text  = ''
+        self._think_buf  = ''
+        self._in_think   = False
         self._asst_bubble = self._add_bubble('', is_user=False)
         self._is_cancelled = False
         self._set_sending(True)
@@ -655,13 +672,54 @@ class _ChatWidget:
     # ── GTK-thread callbacks ───────────────────────────────────────────────────
 
     def _on_token(self, token: str):
-        self._asst_text += token
-        if self._asst_bubble:
-            self._asst_bubble.append(token)
-        self._scroll_bottom()
+        self._think_buf += token
+        self._flush_think_buf()
         return False
 
+    def _flush_think_buf(self):
+        """State machine: filter <think>…</think> blocks from the token stream."""
+        while True:
+            if not self._in_think:
+                idx = self._think_buf.find('<think>')
+                if idx == -1:
+                    # No opening tag — emit everything except a 6-char tail that
+                    # might be the start of an incomplete '<think>' tag.
+                    safe = max(0, len(self._think_buf) - 6)
+                    if safe:
+                        self._emit_token(self._think_buf[:safe])
+                        self._think_buf = self._think_buf[safe:]
+                    break
+                else:
+                    if idx > 0:
+                        self._emit_token(self._think_buf[:idx])
+                    self._think_buf = self._think_buf[idx + 7:]
+                    self._in_think  = True
+                    self._status_lbl.set_text('Thinking…')
+            else:
+                idx = self._think_buf.find('</think>')
+                if idx == -1:
+                    # Still inside think block — discard, keep tail for partial tag
+                    self._think_buf = self._think_buf[-7:]
+                    break
+                else:
+                    self._think_buf = self._think_buf[idx + 8:]
+                    self._in_think  = False
+                    self._status_lbl.set_text('')
+
+    def _emit_token(self, text: str):
+        if not text:
+            return
+        self._asst_text += text
+        if self._asst_bubble:
+            self._asst_bubble.append(text)
+        self._scroll_bottom()
+
     def _on_done(self):
+        # Flush any remaining non-think buffer
+        if self._think_buf and not self._in_think:
+            self._emit_token(self._think_buf)
+        self._think_buf = ''
+        self._in_think  = False
         if self._asst_text:
             self._history.append(
                 {'role': 'assistant', 'content': self._asst_text}
@@ -675,8 +733,9 @@ class _ChatWidget:
         return False
 
     def _on_error(self, msg: str):
+        self._think_buf = ''
+        self._in_think  = False
         if not self._asst_text and self._asst_bubble:
-            # walk: container widget → hbox → ListBoxRow
             row = self._asst_bubble.widget.get_parent()
             if row:
                 row = row.get_parent()
