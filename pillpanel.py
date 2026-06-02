@@ -618,11 +618,27 @@ class PillPanel:
 
     def _setup_pill_menu(self, PreferencesWindowClass):
         self._prefs_cls = PreferencesWindowClass
-        self.window.pill.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-        self.window.pill.connect('button-press-event', self._on_pill_click)
+        # Empty-space clicks land on the outer GdkWindow directly (the pill Gtk.Box
+        # has no own GdkWindow). Applet button clicks land on the button's own
+        # GdkWindow and propagate up. We distinguish by comparing event.window.
+        outer = self.window.window
+        outer.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        outer.connect('button-press-event', self._on_pill_click)
 
-    def _on_pill_click(self, _widget, event):
+    def _on_pill_click(self, win_widget, event):
         if event.button != 3:
+            return False
+        # Reject if this came from a child GdkWindow (i.e. an applet button).
+        if event.window != win_widget.get_window():
+            return False
+        # Reject if outside the pill's bounding box.
+        pill  = self.window.pill
+        alloc = pill.get_allocation()
+        ok, px, py = pill.translate_coordinates(win_widget, 0, 0)
+        if not ok:
+            return False
+        if not (px <= event.x < px + alloc.width and
+                py <= event.y < py + alloc.height):
             return False
         menu = Gtk.Menu()
         item = Gtk.MenuItem(label='Preferences')
