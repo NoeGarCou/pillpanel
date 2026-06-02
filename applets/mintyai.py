@@ -1,6 +1,5 @@
 """applets/mintyai.py — Minty AI chat applet for PillPanel."""
 
-import html as _html
 import json
 import logging
 import re
@@ -117,6 +116,48 @@ button.minty-think-btn:checked {
 button.minty-think-btn:checked:hover {
     background: rgba(135, 192, 80, 0.22);
 }
+.minty-code-wrap {
+    background-color: rgba(0, 0, 0, 0.32);
+    border-radius: 7px;
+    margin-top: 4px;
+    margin-bottom: 4px;
+}
+.minty-code-bar {
+    background-color: rgba(0, 0, 0, 0.18);
+    border-radius: 7px 7px 0 0;
+}
+.minty-code-lang {
+    color: rgba(255, 255, 255, 0.38);
+    font-size: 10px;
+}
+button.minty-copy-btn {
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow: none;
+    border-radius: 4px;
+    color: rgba(255, 255, 255, 0.52);
+    font-size: 11px;
+    padding: 2px 7px;
+    min-height: 0;
+    min-width: 0;
+}
+button.minty-copy-btn:hover {
+    background: rgba(255, 255, 255, 0.16);
+    color: white;
+}
+textview.minty-code-tv {
+    background-color: transparent;
+    font-family: 'Cascadia Code', 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 12px;
+}
+textview.minty-code-tv text {
+    background-color: transparent;
+    color: rgba(255, 255, 255, 0.88);
+}
+.minty-think-lbl {
+    color: rgba(255, 255, 255, 0.35);
+    font-size: 11px;
+}
 """
 
 _css_installed = False
@@ -161,206 +202,157 @@ def _human_size(n: int) -> str:
     return f'{n:.1f} GB'
 
 
-# ── WebKit2 (optional — markdown rendering) ───────────────────────────────────
-
-_WebKit2 = None
-for _wk_ver in ('4.1', '4.0'):
-    try:
-        gi.require_version('WebKit2', _wk_ver)
-        from gi.repository import WebKit2 as _WebKit2
-        break
-    except Exception:
-        pass
-_HAS_WEBKIT = _WebKit2 is not None
-
-# ── Markdown → HTML ────────────────────────────────────────────────────────────
+# ── Markdown → Pango helpers ──────────────────────────────────────────────────
 
 def _has_md(text: str) -> bool:
     return bool(re.search(r'```|`[^`]|\*\*|^#{1,3} |^[-*+] |^\d+[.)]\s', text, re.M))
 
 
-def _inline(text: str) -> str:
-    """Inline markdown on already-HTML-escaped text: inline code, bold, italic."""
-    parts  = re.split(r'`([^`]+)`', text)
-    result = []
-    for i, p in enumerate(parts):
+def _inline_pango(text: str) -> str:
+    """Inline markdown on plain text → Pango markup."""
+    segs = re.split(r'`([^`]+)`', text)
+    out = []
+    for i, seg in enumerate(segs):
         if i % 2:
-            result.append(f'<code>{_html.escape(p)}</code>')
+            out.append('<tt>' + GLib.markup_escape_text(seg) + '</tt>')
         else:
-            s = _html.escape(p)
-            s = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', s)
-            s = re.sub(r'\*(.+?)\*',     r'<em>\1</em>',          s)
-            result.append(s)
-    return ''.join(result)
+            s = GLib.markup_escape_text(seg)
+            s = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', s)
+            s = re.sub(r'\*(.+?)\*',     r'<i>\1</i>',  s)
+            out.append(s)
+    return ''.join(out)
 
 
-def _md_to_html(text: str) -> str:
-    """Convert LLM markdown to safe HTML (no external deps)."""
-    blocks = []
-
-    def pull_block(m):
-        lang = m.group(1).strip()
-        code = _html.escape(m.group(2).rstrip('\n'))
-        blocks.append((lang, code))
-        return f'\x00B{len(blocks)-1}\x00'
-
-    text = re.sub(r'```([^\n`]*)\n?(.*?)```', pull_block, text, flags=re.DOTALL)
-
-    out, in_ul, in_ol = [], False, False
-
-    def close_lists():
-        nonlocal in_ul, in_ol
-        if in_ul: out.append('</ul>'); in_ul = False
-        if in_ol: out.append('</ol>'); in_ol = False
-
+def _prose_to_pango(text: str) -> str:
+    """Convert a prose markdown block to a Pango markup string."""
+    lines = []
     for line in text.split('\n'):
-        if '\x00B' in line:
-            close_lists(); out.append(line); continue
-        if m := re.match(r'^(#{1,3}) (.+)', line):
-            close_lists()
-            n = len(m.group(1))
-            out.append(f'<h{n}>{_inline(m.group(2))}</h{n}>'); continue
-        if m := re.match(r'^[ \t]*[-*+] (.+)', line):
-            if in_ol: out.append('</ol>'); in_ol = False
-            if not in_ul: out.append('<ul>'); in_ul = True
-            out.append(f'<li>{_inline(m.group(1))}</li>'); continue
-        if m := re.match(r'^[ \t]*\d+[.)]\s+(.+)', line):
-            if in_ul: out.append('</ul>'); in_ul = False
-            if not in_ol: out.append('<ol>'); in_ol = True
-            out.append(f'<li>{_inline(m.group(1))}</li>'); continue
-        close_lists()
+        m = re.match(r'^(#{1,3}) (.+)', line)
+        if m:
+            n  = len(m.group(1))
+            sz = ('large', 'medium', 'medium')[n - 1]
+            lines.append(f'<span size="{sz}"><b>{_inline_pango(m.group(2))}</b></span>')
+            continue
+        m = re.match(r'^[ \t]*[-*+] (.+)', line)
+        if m:
+            lines.append('  • ' + _inline_pango(m.group(1)))
+            continue
+        m = re.match(r'^[ \t]*(\d+)[.)]\s+(.+)', line)
+        if m:
+            lines.append(f'  {m.group(1)}. ' + _inline_pango(m.group(2)))
+            continue
         s = line.strip()
-        if not s:
-            out.append('<br>'); continue
-        out.append(f'<p>{_inline(s)}</p>')
-
-    close_lists()
-    result = '\n'.join(out)
-
-    for i, (lang, code) in enumerate(blocks):
-        lc = f' class="lang-{lang}"' if lang else ''
-        result = result.replace(
-            f'\x00B{i}\x00',
-            f'<div class="cb">'
-            f'<button class="cp" onclick="cpBlock(this)">Copy</button>'
-            f'<pre><code{lc}>{code}</code></pre>'
-            f'</div>',
-        )
-    return result
+        lines.append(_inline_pango(s) if s else '')
+    return '\n'.join(lines).strip()
 
 
-_WK_CSS = """
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body {
-    background: transparent;
-    color: rgba(255,255,255,0.92);
-    font-family: sans-serif;
-    font-size: 13px;
-    line-height: 1.4;
-    padding: 2px 8px 4px 8px;
-    overflow: hidden;
-    word-break: break-word;
-}
-p { margin: 0 0 5px; }
-p:last-child { margin-bottom: 0; }
-h1, h2, h3 { font-size: 14px; font-weight: 600; margin: 6px 0 3px; }
-h1 { font-size: 15px; }
-ul, ol { padding-left: 18px; margin: 3px 0 5px; }
-li { margin: 1px 0; }
-br { display: block; content: ''; margin-top: 3px; }
-.cb { position: relative; margin: 6px 0; }
-pre {
-    background: rgba(0,0,0,0.35);
-    border-radius: 7px;
-    padding: 10px 12px;
-    overflow-x: auto;
-    white-space: pre;
-    font-size: 12px;
-    line-height: 1.45;
-}
-code { font-family: 'Cascadia Code','JetBrains Mono','Fira Code',monospace; }
-p > code, li > code {
-    background: rgba(0,0,0,0.28);
-    border-radius: 3px;
-    padding: 1px 5px;
-}
-.cp {
-    position: absolute;
-    top: 7px; right: 7px;
-    background: rgba(255,255,255,0.10);
-    border: 1px solid rgba(255,255,255,0.18);
-    border-radius: 4px;
-    color: rgba(255,255,255,0.60);
-    cursor: pointer;
-    font: 11px/1 inherit;
-    padding: 3px 8px;
-}
-.cp:hover { background: rgba(255,255,255,0.20); color: white; }
-.cp.ok    { color: #87c050; border-color: #87c050; }
-::-webkit-scrollbar { height: 4px; width: 4px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.22); border-radius: 2px; }
-details.thinking {
-    border: 1px solid rgba(255,255,255,0.09);
-    border-radius: 6px;
-    margin-bottom: 8px;
-    overflow: hidden;
-}
-details.thinking > summary {
-    cursor: pointer;
-    padding: 5px 10px;
-    color: rgba(255,255,255,0.42);
-    font-size: 11px;
-    user-select: none;
-    list-style: none;
-    outline: none;
-}
-details.thinking > summary::-webkit-details-marker { display: none; }
-details.thinking > summary::before { content: '▶  '; font-size: 9px; }
-details.thinking[open] > summary::before { content: '▼  '; }
-details.thinking > summary:hover { color: rgba(255,255,255,0.65); background: rgba(255,255,255,0.04); }
-.think-content {
-    padding: 8px 12px;
-    border-top: 1px solid rgba(255,255,255,0.07);
-    color: rgba(255,255,255,0.38);
-    font-size: 11px;
-    white-space: pre-wrap;
-    word-break: break-word;
-    line-height: 1.4;
-    max-height: 220px;
-    overflow-y: auto;
-}
-"""
-
-_WK_JS = """
-function cpBlock(btn) {
-    var code = btn.nextElementSibling.querySelector('code') || btn.nextElementSibling;
-    var ta   = document.createElement('textarea');
-    ta.value = code.textContent;
-    ta.style.cssText = 'position:fixed;top:-9999px;left:0';
-    document.body.appendChild(ta); ta.select();
-    try { document.execCommand('copy'); } catch(e) {}
-    document.body.removeChild(ta);
-    btn.textContent = '✓ Copied'; btn.classList.add('ok');
-    setTimeout(function(){ btn.textContent='Copy'; btn.classList.remove('ok'); }, 2000);
-}
-"""
+def _build_prose_widget(text: str, popup_width: int) -> Gtk.Label:
+    try:
+        lbl = Gtk.Label()
+        lbl.set_markup(_prose_to_pango(text.strip()))
+    except Exception:
+        lbl = Gtk.Label(label=text.strip())
+    lbl.set_line_wrap(True)
+    lbl.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+    lbl.set_xalign(0)
+    lbl.set_selectable(True)
+    lbl.set_max_width_chars(42)
+    lbl.get_style_context().add_class('minty-msg')
+    return lbl
 
 
-def _wk_page(content: str) -> str:
-    return (f'<!DOCTYPE html><html><head><meta charset="UTF-8">'
-            f'<style>{_WK_CSS}</style></head>'
-            f'<body>{content}'
-            f'<script>{_WK_JS}</script></body></html>')
+def _copy_code(btn: Gtk.Button, code: str):
+    Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(code, -1)
+    btn.set_label('✓ Copied')
+    GLib.timeout_add(2000, lambda: btn.set_label('Copy') or False)
+
+
+def _build_code_block(lang: str, code: str) -> Gtk.Box:
+    wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+    wrap.get_style_context().add_class('minty-code-wrap')
+
+    bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+    bar.get_style_context().add_class('minty-code-bar')
+
+    if lang:
+        ll = Gtk.Label(label=lang)
+        ll.get_style_context().add_class('minty-code-lang')
+        ll.set_margin_start(10)
+        ll.set_margin_top(4)
+        ll.set_margin_bottom(4)
+        bar.pack_start(ll, False, False, 0)
+
+    cb = Gtk.Button(label='Copy')
+    cb.get_style_context().add_class('minty-copy-btn')
+    cb.set_margin_end(6)
+    cb.set_margin_top(3)
+    cb.set_margin_bottom(3)
+    cb.connect('clicked', lambda _b, c=code: _copy_code(_b, c))
+    bar.pack_end(cb, False, False, 0)
+
+    wrap.pack_start(bar, False, False, 0)
+
+    tv = Gtk.TextView()
+    tv.set_editable(False)
+    tv.set_cursor_visible(False)
+    tv.get_buffer().set_text(code)
+    tv.set_wrap_mode(Gtk.WrapMode.NONE)
+    tv.set_left_margin(12)
+    tv.set_right_margin(12)
+    tv.set_top_margin(8)
+    tv.set_bottom_margin(8)
+    tv.get_style_context().add_class('minty-code-tv')
+
+    sw = Gtk.ScrolledWindow()
+    sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+    sw.add(tv)
+    wrap.pack_start(sw, False, False, 0)
+    return wrap
+
+
+def _build_think_widget(thinking: str) -> Gtk.Expander:
+    exp = Gtk.Expander(label='Thinking')
+    exp.set_margin_bottom(6)
+
+    lbl = Gtk.Label(label=thinking)
+    lbl.set_line_wrap(True)
+    lbl.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+    lbl.set_xalign(0)
+    lbl.set_max_width_chars(42)
+    lbl.get_style_context().add_class('minty-think-lbl')
+    lbl.set_margin_start(6)
+    lbl.set_margin_top(4)
+    lbl.set_margin_bottom(4)
+
+    exp.add(lbl)
+    return exp
+
+
+def _parse_md_widgets(text: str, popup_width: int) -> list:
+    """Split on code fences; return list of GTK widgets for each segment."""
+    segs, last = [], 0
+    for m in re.finditer(r'```([^\n`]*)\n?(.*?)```', text, re.DOTALL):
+        if m.start() > last:
+            segs.append(('prose', text[last:m.start()]))
+        segs.append(('code', m.group(1).strip(), m.group(2).rstrip('\n')))
+        last = m.end()
+    if last < len(text):
+        segs.append(('prose', text[last:]))
+
+    out = []
+    for seg in segs:
+        if seg[0] == 'prose':
+            if seg[1].strip():
+                out.append(_build_prose_widget(seg[1], popup_width))
+        else:
+            out.append(_build_code_block(seg[1], seg[2]))
+    return out
 
 
 # ── Assistant bubble ───────────────────────────────────────────────────────────
 
 class _AsstBubble:
-    """
-    Streams text into a Gtk.Label; upgrades to a WebKit2.WebView on finalize()
-    when the response contains markdown worth rendering.
-    """
+    """Streams text into a plain label; renders rich GTK widgets on finalize()."""
 
     def __init__(self, popup_width: int = POPUP_WIDTH, scroll_fn=None):
         self._popup_width = popup_width
@@ -387,74 +379,18 @@ class _AsstBubble:
         self._lbl.set_text(self._text)
 
     def finalize(self, thinking: str = ''):
-        if _HAS_WEBKIT and (thinking or _has_md(self._text)):
-            self._upgrade(thinking)
+        if thinking or _has_md(self._text):
+            self._render_rich(thinking)
 
-    def _upgrade(self, thinking: str = ''):
+    def _render_rich(self, thinking: str):
         self.widget.remove(self._lbl)
-        wv = _WebKit2.WebView()
-        s  = wv.get_settings()
-        s.set_enable_javascript(True)
-        s.set_default_font_size(13)
-        s.set_default_monospace_font_size(12)
-        gtk_font = Gtk.Settings.get_default().get_property('gtk-font-name') or ''
-        family   = gtk_font.rsplit(' ', 1)[0] if gtk_font else 'sans-serif'
-        s.set_default_font_family(family)
-        s.set_sans_serif_font_family(family)
-        wv.set_background_color(Gdk.RGBA(0, 0, 0, 0))
-        wv.connect('context-menu', lambda *_: True)
-        wv.connect('load-changed', self._on_load)
-        est = 300 if ('```' in self._text or thinking) else max(60, self._text.count('\n') * 22)
-        wv.set_size_request(self._popup_width - 16, est)
-        # Build page: optional collapsible thinking block + rendered content
-        parts = []
         if thinking:
-            esc = _html.escape(thinking)
-            parts.append(
-                f'<details class="thinking" open>'
-                f'<summary>Thinking</summary>'
-                f'<div class="think-content">{esc}</div>'
-                f'</details>'
-            )
-        parts.append(_md_to_html(self._text) if self._text else '')
-        wv.load_html(_wk_page(''.join(parts)), None)
-        self._wv = wv
-        self.widget.add(wv)
-        wv.show()
-
-    def _on_load(self, wv, event):
-        if event == _WebKit2.LoadEvent.FINISHED:
-            # Small delay so CSS layout settles before we measure
-            GLib.timeout_add(80, self._query_height, wv)
-
-    def _query_height(self, wv):
-        wv.run_javascript(
-            'Math.max(document.body.scrollHeight,'
-            '         document.documentElement.scrollHeight)',
-            None, self._on_height, None,
-        )
-        return False  # don't repeat
-
-    def _on_height(self, source, result, _):
-        try:
-            h = source.run_javascript_finish(result).get_js_value().to_int32()
-            GLib.idle_add(self._apply_height, source, h + 4)
-        except Exception as exc:
-            log.debug(f'[Minty] WebView height: {exc}')
-
-    def _apply_height(self, wv, h):
-        wv.set_size_request(self._popup_width - 16, h)
-        w = wv
-        while w:
-            w = w.get_parent()
-            if isinstance(w, Gtk.ListBox):
-                w.queue_resize()
-                break
-        # Scroll after layout reflow settles (idle_add is too soon after queue_resize)
+            self.widget.pack_start(_build_think_widget(thinking), False, False, 0)
+        for w in _parse_md_widgets(self._text, self._popup_width):
+            self.widget.pack_start(w, False, False, 0)
+        self.widget.show_all()
         if self._scroll_fn:
-            fn = self._scroll_fn
-            GLib.timeout_add(300, lambda: fn() or False)
-        return False
+            GLib.idle_add(self._scroll_fn)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
