@@ -301,6 +301,14 @@ class TrayItem:
         icon_name = str(self._prop('IconName') or '')
         if icon_name:
             log.info(f"[SNI] {self.item_key}: IconName={icon_name!r}")
+            # Some apps (e.g. AppIndicator-based) ship icons outside the system
+            # theme and advertise the directory via IconThemePath.
+            theme_path = str(self._prop('IconThemePath') or '')
+            if theme_path:
+                theme = Gtk.IconTheme.get_default()
+                if theme_path not in theme.get_search_path():
+                    theme.prepend_search_path(theme_path)
+                    log.info(f"[SNI] {self.item_key}: added icon theme path: {theme_path!r}")
             img = Gtk.Image()
             img.set_from_icon_name(icon_name, Gtk.IconSize.SMALL_TOOLBAR)
             img.set_pixel_size(ICON_SIZE)

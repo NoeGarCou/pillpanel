@@ -14,7 +14,7 @@ Replaces Cinnamon's built-in top panel. Features:
   • Show Desktop button
 
 Layout:
-  [AppMenu]         [Date  Time]         [Bat][Net][Vol] [Tray…] [Desktop]
+  [AppMenu][Minty]  [Date  Time]         [Bat][Net][Vol] [Tray…] [Desktop]
      left              center                        right
 
 Usage:
@@ -578,17 +578,19 @@ class PillPanel:
 
     def _load_applets(self):
         # Import here so D-Bus mainloop is already set
-        from applets.appmenu import AppMenuApplet
-        from applets.clock       import ClockApplet
-        from applets.battery     import BatteryApplet
-        from applets.network     import NetworkApplet
-        from applets.volume      import VolumeApplet
-        from applets.tray        import TrayApplet
+        from applets.appmenu   import AppMenuApplet
+        from applets.mintyai   import MintyAIApplet
+        from applets.clock     import ClockApplet
+        from applets.battery   import BatteryApplet
+        from applets.network   import NetworkApplet
+        from applets.volume    import VolumeApplet
+        from applets.tray      import TrayApplet
         from applets.showdesktop import ShowDesktopApplet
 
         specs = [
             # (class,              section)
             (AppMenuApplet,     'left'),
+            (MintyAIApplet,     'left'),
             (ClockApplet,       'center'),
             (BatteryApplet,     'right'),
             (NetworkApplet,     'right'),
