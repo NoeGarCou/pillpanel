@@ -310,23 +310,6 @@ def _build_code_block(lang: str, code: str) -> Gtk.Box:
     return wrap
 
 
-def _build_think_widget(thinking: str) -> Gtk.Expander:
-    exp = Gtk.Expander(label='Thinking')
-    exp.set_margin_bottom(6)
-
-    lbl = Gtk.Label(label=thinking)
-    lbl.set_line_wrap(True)
-    lbl.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
-    lbl.set_xalign(0)
-    lbl.set_max_width_chars(42)
-    lbl.get_style_context().add_class('minty-think-lbl')
-    lbl.set_margin_start(6)
-    lbl.set_margin_top(4)
-    lbl.set_margin_bottom(4)
-
-    exp.add(lbl)
-    return exp
-
 
 def _parse_md_widgets(text: str, popup_width: int) -> list:
     """Split on code fences; return list of GTK widgets for each segment."""
@@ -357,6 +340,10 @@ class _AsstBubble:
     def __init__(self, popup_width: int = POPUP_WIDTH, scroll_fn=None):
         self._popup_width = popup_width
         self._scroll_fn   = scroll_fn
+        self._think_exp   = None
+        self._think_lbl   = None
+        self._think_text  = ''
+
         self.widget = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.widget.set_margin_start(8)
         self.widget.set_margin_end(8)
@@ -378,14 +365,40 @@ class _AsstBubble:
         self._text += token
         self._lbl.set_text(self._text)
 
-    def finalize(self, thinking: str = ''):
-        if thinking or _has_md(self._text):
-            self._render_rich(thinking)
+    def append_thinking(self, token: str):
+        self._think_text += token
+        if self._think_exp is None:
+            lbl = Gtk.Label()
+            lbl.set_line_wrap(True)
+            lbl.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+            lbl.set_xalign(0)
+            lbl.set_max_width_chars(42)
+            lbl.get_style_context().add_class('minty-think-lbl')
+            lbl.set_margin_start(6)
+            lbl.set_margin_top(4)
+            lbl.set_margin_bottom(4)
+            exp = Gtk.Expander(label='Thinking…')
+            exp.set_expanded(True)
+            exp.set_margin_bottom(4)
+            exp.add(lbl)
+            self._think_exp = exp
+            self._think_lbl = lbl
+            self.widget.pack_start(exp, False, False, 0)
+            self.widget.reorder_child(exp, 0)
+            exp.show_all()
+        self._think_lbl.set_text(self._think_text)
+        if self._scroll_fn:
+            GLib.idle_add(self._scroll_fn)
 
-    def _render_rich(self, thinking: str):
+    def finalize(self, thinking: str = ''):
+        if self._think_exp:
+            self._think_exp.set_label('Thinking')
+            self._think_exp.set_expanded(False)
+        if _has_md(self._text):
+            self._render_rich()
+
+    def _render_rich(self):
         self.widget.remove(self._lbl)
-        if thinking:
-            self.widget.pack_start(_build_think_widget(thinking), False, False, 0)
         for w in _parse_md_widgets(self._text, self._popup_width):
             self.widget.pack_start(w, False, False, 0)
         self.widget.show_all()
@@ -674,6 +687,8 @@ class _ChatWidget:
 
     def _on_thinking_token(self, token: str):
         self._asst_thinking += token
+        if self._asst_bubble:
+            self._asst_bubble.append_thinking(token)
         return False
 
     def _on_token(self, token: str):

@@ -33,7 +33,8 @@
       "Bash(python3 -c \"import applets.mintyai\")",
       "Bash(python3 -c \"import applets.mintyai; import applets.appmenu\")",
       "Bash(python3 -m py_compile pillpanel.py)",
-      "Bash(apt-cache search *)"
+      "Bash(apt-cache search *)",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('/home/n-linux/Projects/NPanel/applets/mintyai.py'\\).read\\(\\)\\); print\\('OK'\\)\")"
     ],
     "additionalDirectories": [
       "/tmp",
