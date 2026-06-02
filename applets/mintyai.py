@@ -490,6 +490,7 @@ class _SettingsWindow:
         win.set_keep_above(True)
         win.set_border_width(18)
         win.set_default_size(400, -1)
+        win.set_accept_focus(True)
         win.connect('delete-event', lambda w, _e: w.hide() or True)
         self._win = win
 
@@ -510,6 +511,8 @@ class _SettingsWindow:
         vbox.pack_start(_bold_label('System prompt'), False, False, 0)
 
         self._prompt_view = Gtk.TextView()
+        self._prompt_view.set_editable(True)
+        self._prompt_view.set_cursor_visible(True)
         self._prompt_view.set_wrap_mode(Gtk.WrapMode.WORD)
         self._prompt_view.set_left_margin(8)
         self._prompt_view.set_right_margin(8)
