@@ -208,25 +208,27 @@ class _ChatWidget:
     """Self-contained chat UI. Instantiated once; lives on the applet."""
 
     def __init__(self):
-        self._history      = [{'role': 'system', 'content': SYSTEM_PROMPT}]
-        self._is_sending   = False
-        self._is_cancelled = False
-        self._asst_lbl     = None   # Gtk.Label being streamed into
-        self._asst_text    = ''     # accumulated text for the current response
-        self.root          = self._build()
+        self._model         = DEFAULT_MODEL
+        self._system_prompt = SYSTEM_PROMPT
+        self._history       = [{'role': 'system', 'content': self._system_prompt}]
+        self._is_sending    = False
+        self._is_cancelled  = False
+        self._asst_lbl      = None   # Gtk.Label being streamed into
+        self._asst_text     = ''     # accumulated text for the current response
+        self.root           = self._build()
 
     # ── Public ────────────────────────────────────────────────────────────────
 
     @property
     def current_model(self) -> str:
-        return self._model_combo.get_active_text() or DEFAULT_MODEL
+        return self._model
 
     def cancel(self):
         self._is_cancelled = True
 
     def new_chat(self):
         self.cancel()
-        self._history = [{'role': 'system', 'content': SYSTEM_PROMPT}]
+        self._history = [{'role': 'system', 'content': self._system_prompt}]
         for row in self._list_box.get_children():
             self._list_box.remove(row)
         self._status_lbl.set_text('')
@@ -238,17 +240,22 @@ class _ChatWidget:
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         root.set_size_request(POPUP_WIDTH, -1)
 
-        # ── Header: model picker + new-chat button ──────────────────────────
+        # ── Header: settings button + new-chat button ───────────────────────
         hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         hdr.set_margin_start(10)
         hdr.set_margin_end(10)
         hdr.set_margin_top(8)
         hdr.set_margin_bottom(6)
 
-        self._model_combo = Gtk.ComboBoxText()
-        self._model_combo.append_text(DEFAULT_MODEL)
-        self._model_combo.set_active(0)
-        hdr.pack_start(self._model_combo, True, True, 0)
+        settings_btn = Gtk.Button()
+        settings_btn.set_relief(Gtk.ReliefStyle.NONE)
+        settings_btn.get_style_context().add_class('minty-new-btn')
+        settings_btn.set_tooltip_text('Settings')
+        settings_btn.add(Gtk.Image.new_from_icon_name(
+            'preferences-system-symbolic', Gtk.IconSize.MENU
+        ))
+        settings_btn.connect('clicked', lambda _: _SettingsWindow.open(self))
+        hdr.pack_start(settings_btn, False, False, 0)
 
         new_btn = Gtk.Button(label='New chat')
         new_btn.set_relief(Gtk.ReliefStyle.NONE)
@@ -306,7 +313,6 @@ class _ChatWidget:
 
         root.pack_end(inp, False, False, 0)
 
-        threading.Thread(target=self._load_models, daemon=True).start()
         return root
 
     # ── Send / stream ─────────────────────────────────────────────────────────
@@ -456,7 +462,104 @@ class _ChatWidget:
         else:
             self._cancel_btn.hide()
 
-    # ── Model listing ─────────────────────────────────────────────────────────
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Settings window
+# ══════════════════════════════════════════════════════════════════════════════
+
+class _SettingsWindow:
+    """Model picker + system-prompt editor for MintyAI."""
+
+    _instance = None
+
+    @classmethod
+    def open(cls, chat: _ChatWidget):
+        if cls._instance and cls._instance._win.get_visible():
+            cls._instance._win.present()
+            return
+        inst        = object.__new__(cls)
+        inst._chat  = chat
+        inst._build()
+        cls._instance = inst
+
+    def _build(self):
+        win = Gtk.Window(title='Minty Settings')
+        win.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+        win.set_resizable(False)
+        win.set_keep_above(True)
+        win.set_border_width(18)
+        win.set_default_size(400, -1)
+        win.connect('delete-event', lambda w, _e: w.hide() or True)
+        self._win = win
+
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        win.add(vbox)
+
+        # ── Model ─────────────────────────────────────────────────────────────
+        vbox.pack_start(_bold_label('Model'), False, False, 0)
+
+        self._model_combo = Gtk.ComboBoxText()
+        self._model_combo.append_text(self._chat.current_model)
+        self._model_combo.set_active(0)
+        vbox.pack_start(self._model_combo, False, False, 0)
+
+        threading.Thread(target=self._load_models, daemon=True).start()
+
+        # ── System prompt ──────────────────────────────────────────────────────
+        vbox.pack_start(_bold_label('System prompt'), False, False, 0)
+
+        self._prompt_view = Gtk.TextView()
+        self._prompt_view.set_wrap_mode(Gtk.WrapMode.WORD)
+        self._prompt_view.set_left_margin(8)
+        self._prompt_view.set_right_margin(8)
+        self._prompt_view.set_top_margin(6)
+        self._prompt_view.set_bottom_margin(6)
+        self._prompt_view.get_buffer().set_text(self._chat._system_prompt)
+
+        prompt_scroll = Gtk.ScrolledWindow()
+        prompt_scroll.set_shadow_type(Gtk.ShadowType.IN)
+        prompt_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        prompt_scroll.set_size_request(-1, 150)
+        prompt_scroll.add(self._prompt_view)
+        vbox.pack_start(prompt_scroll, False, False, 0)
+
+        hint = Gtk.Label(label='Changes take effect in new chats.')
+        hint.set_halign(Gtk.Align.START)
+        hint.get_style_context().add_class('cal-dim')
+        vbox.pack_start(hint, False, False, 0)
+
+        # ── Buttons ────────────────────────────────────────────────────────────
+        vbox.pack_start(Gtk.Separator(), False, False, 0)
+
+        btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        btn_row.set_halign(Gtk.Align.END)
+
+        apply_btn = Gtk.Button(label='Apply')
+        apply_btn.connect('clicked', self._on_apply)
+        btn_row.pack_start(apply_btn, False, False, 0)
+
+        close_btn = Gtk.Button(label='Close')
+        close_btn.connect('clicked', lambda _: self._win.hide())
+        btn_row.pack_start(close_btn, False, False, 0)
+
+        vbox.pack_start(btn_row, False, False, 0)
+        win.show_all()
+
+    def _on_apply(self, _btn):
+        model = self._model_combo.get_active_text()
+        if model:
+            self._chat._model = model
+
+        buf    = self._prompt_view.get_buffer()
+        prompt = buf.get_text(
+            buf.get_start_iter(), buf.get_end_iter(), False
+        ).strip()
+        if prompt:
+            self._chat._system_prompt = prompt
+
+        self._win.hide()
+
+    # ── Model listing (background thread) ─────────────────────────────────────
 
     def _load_models(self):
         try:
@@ -464,16 +567,28 @@ class _ChatWidget:
             if models:
                 GLib.idle_add(self._populate_models, models)
         except Exception:
-            pass  # keep the DEFAULT_MODEL fallback in the combo
+            pass
 
     def _populate_models(self, models: list):
+        current = self._chat.current_model
         self._model_combo.remove_all()
         for name in models:
             self._model_combo.append_text(name)
-        # Prefer the default model if present
+        for i, name in enumerate(models):
+            if name == current:
+                self._model_combo.set_active(i)
+                return
         for i, name in enumerate(models):
             if DEFAULT_MODEL in name:
                 self._model_combo.set_active(i)
                 return
         self._model_combo.set_active(0)
         return False
+
+
+def _bold_label(text: str) -> Gtk.Label:
+    lbl = Gtk.Label()
+    lbl.set_markup(f'<b>{text}</b>')
+    lbl.set_halign(Gtk.Align.START)
+    return lbl
+
