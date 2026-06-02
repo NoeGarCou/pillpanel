@@ -296,7 +296,9 @@ class _AsstBubble:
     when the response contains markdown worth rendering.
     """
 
-    def __init__(self):
+    def __init__(self, popup_width: int = POPUP_WIDTH, scroll_fn=None):
+        self._popup_width = popup_width
+        self._scroll_fn   = scroll_fn
         self.widget = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.widget.set_margin_start(8)
         self.widget.set_margin_end(8)
@@ -332,7 +334,7 @@ class _AsstBubble:
         # Rough initial height so there's no tiny-box flash before the real
         # height is measured. Code responses get more space than prose.
         est = 300 if '```' in self._text else max(60, self._text.count('\n') * 22)
-        wv.set_size_request(POPUP_WIDTH - 16, est)
+        wv.set_size_request(self._popup_width - 16, est)
         wv.load_html(_wk_page(_md_to_html(self._text)), None)
         self._wv = wv
         self.widget.add(wv)
@@ -359,14 +361,16 @@ class _AsstBubble:
             log.debug(f'[Minty] WebView height: {exc}')
 
     def _apply_height(self, wv, h):
-        wv.set_size_request(POPUP_WIDTH - 16, h)
-        # Walk up to find the ListBox and tell it to reflow
+        wv.set_size_request(self._popup_width - 16, h)
         w = wv
         while w:
             w = w.get_parent()
             if isinstance(w, Gtk.ListBox):
                 w.queue_resize()
                 break
+        # Scroll to bottom AFTER the layout reflow so the new content is visible
+        if self._scroll_fn:
+            GLib.idle_add(self._scroll_fn)
         return False
 
 
@@ -459,6 +463,8 @@ class _ChatWidget:
         self._model         = DEFAULT_MODEL
         self._system_prompt = SYSTEM_PROMPT
         self._history       = [{'role': 'system', 'content': self._system_prompt}]
+        self._popup_width   = panel.config.get('minty_popup_width', POPUP_WIDTH)
+        self._chat_height   = panel.config.get('minty_chat_height', CHAT_HEIGHT)
         self._is_sending    = False
         self._is_cancelled  = False
         self._asst_bubble   = None   # _AsstBubble being streamed into
@@ -482,11 +488,17 @@ class _ChatWidget:
         self._status_lbl.set_text('')
         self._set_sending(False)
 
+    def resize(self, width: int, height: int):
+        self._popup_width = width
+        self._chat_height = height
+        self.root.set_size_request(width, -1)
+        self._scroll.set_size_request(-1, height)
+
     # ── Build ─────────────────────────────────────────────────────────────────
 
     def _build(self):
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        root.set_size_request(POPUP_WIDTH, -1)
+        root.set_size_request(self._popup_width, -1)
 
         # ── Header: settings button + new-chat button ───────────────────────
         hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -523,7 +535,7 @@ class _ChatWidget:
 
         self._scroll = Gtk.ScrolledWindow()
         self._scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        self._scroll.set_size_request(-1, CHAT_HEIGHT)
+        self._scroll.set_size_request(-1, self._chat_height)
         self._scroll.add(self._list_box)
         root.pack_start(self._scroll, True, True, 0)
 
@@ -686,7 +698,7 @@ class _ChatWidget:
             return None
 
         else:
-            asst = _AsstBubble()
+            asst = _AsstBubble(self._popup_width, scroll_fn=self._scroll_bottom)
             hbox.pack_start(asst.widget, True, True, 0)
             row.add(hbox)
             self._list_box.add(row)
@@ -780,6 +792,29 @@ class _SettingsWindow:
         hint.get_style_context().add_class('cal-dim')
         vbox.pack_start(hint, False, False, 0)
 
+        # ── Dimensions ─────────────────────────────────────────────────────────
+        vbox.pack_start(_bold_label('Dimensions'), False, False, 0)
+
+        dim_grid = Gtk.Grid()
+        dim_grid.set_column_spacing(12)
+        dim_grid.set_row_spacing(6)
+
+        w_lbl = Gtk.Label(label='Popup width (px)')
+        w_lbl.set_halign(Gtk.Align.START)
+        dim_grid.attach(w_lbl, 0, 0, 1, 1)
+        self._width_spin = Gtk.SpinButton.new_with_range(300, 700, 20)
+        self._width_spin.set_value(self._chat._popup_width)
+        dim_grid.attach(self._width_spin, 1, 0, 1, 1)
+
+        h_lbl = Gtk.Label(label='Chat height (px)')
+        h_lbl.set_halign(Gtk.Align.START)
+        dim_grid.attach(h_lbl, 0, 1, 1, 1)
+        self._height_spin = Gtk.SpinButton.new_with_range(200, 900, 20)
+        self._height_spin.set_value(self._chat._chat_height)
+        dim_grid.attach(self._height_spin, 1, 1, 1, 1)
+
+        vbox.pack_start(dim_grid, False, False, 0)
+
         # ── Buttons ────────────────────────────────────────────────────────────
         vbox.pack_start(Gtk.Separator(), False, False, 0)
 
@@ -819,6 +854,14 @@ class _SettingsWindow:
         ).strip()
         if prompt:
             self._chat._system_prompt = prompt
+
+        w = int(self._width_spin.get_value())
+        h = int(self._height_spin.get_value())
+        self._chat._panel.config['minty_popup_width'] = w
+        self._chat._panel.config['minty_chat_height'] = h
+        from applets.appmenu import _save as _save_cfg
+        _save_cfg(self._chat._panel.config)
+        self._chat.resize(w, h)
 
         self._win.hide()
 
